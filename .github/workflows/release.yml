@@ -1,0 +1,175 @@
+name: Release VSIX
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: Publish the VSIX to the VS Code Marketplace
+        type: boolean
+        default: false
+      publish_open_vsx:
+        description: Publish the VSIX to the Open VSX Registry
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node -e "const pkg=require('./package.json'); const tag=process.env.GITHUB_REF_NAME; const expected='v' + pkg.version; if(tag !== expected){throw new Error('Tag ' + tag + ' does not match package version ' + expected);}"
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Setup Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Install R test dependencies
+        run: Rscript -e "install.packages(c('knitr', 'rmarkdown', 'htmlwidgets', 'plotly', 'DT'))"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: vsc-r-notebook-*.vsix
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: release-artifacts
+
+      - name: Generate checksum
+        run: |
+          cd release-artifacts
+          sha256sum *.vsix > SHA256SUMS.txt
+
+      - name: Extract release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          extract_section() {
+            awk -v heading="$1" '
+              /^##[[:space:]]+/ {
+                current = $0
+                sub(/^##[[:space:]]+/, "", current)
+                sub(/[[:space:]]+-.*$/, "", current)
+                sub(/^\[/, "", current)
+                sub(/\]$/, "", current)
+                if (current == heading) {
+                  in_section = 1
+                  next
+                }
+                if (in_section) {
+                  exit
+                }
+              }
+              in_section { print }
+            ' CHANGELOG.md
+          }
+          extract_section "$version" > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            extract_section "Unreleased" > release-notes.md
+          fi
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md does not contain a section for ${version} or Unreleased."
+            exit 1
+          fi
+          printf '\nFull changelog: https://github.com/%s/blob/%s/CHANGELOG.md\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> release-notes.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: R Notebook for VS Code ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            release-artifacts/*.vsix
+            release-artifacts/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          overwrite_files: true
+
+  publish-marketplace:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_marketplace)
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: release-artifacts
+
+      - name: Publish VS Code Marketplace
+        run: npx @vscode/vsce publish --pat ${{ secrets.VSCE_PAT }} --skip-duplicate --packagePath ./release-artifacts/*.vsix
+
+  publish-open-vsx:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_open_vsx)
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: release-artifacts
+
+      - name: Publish Open VSX Registry
+        env:
+          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: npx --yes ovsx publish --skip-duplicate --packagePath ./release-artifacts/*.vsix

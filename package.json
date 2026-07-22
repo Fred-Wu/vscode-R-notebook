@@ -1,0 +1,269 @@
+{
+  "name": "vsc-r-notebook",
+  "displayName": "R Notebook for VS Code",
+  "description": "Open R Markdown and Quarto documents as VS Code notebooks with inline R results.",
+  "version": "0.1.0",
+  "publisher": "RConsole",
+  "license": "MIT",
+  "icon": "images/RNotebook.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fred-Wu/vscode-R-notebook.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Fred-Wu/vscode-R-notebook/issues"
+  },
+  "homepage": "https://github.com/Fred-Wu/vscode-R-notebook#readme",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Notebooks",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "r",
+    "rmarkdown",
+    "quarto",
+    "qmd",
+    "notebook",
+    "notebookKernelRNotebook"
+  ],
+  "activationEvents": [
+    "onNotebook:r-notebook"
+  ],
+  "files": [
+    "dist/**",
+    "resources/r/**",
+    "images/RNotebook.png",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Running notebook cells executes local R code."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "R notebook execution requires local files and a local R session."
+    }
+  },
+  "extensionDependencies": [
+    "REditorSupport.r",
+    "RConsole.vsc-r-console"
+  ],
+  "contributes": {
+    "notebookRenderer": [
+      {
+        "id": "r-notebook-markdown-renderer",
+        "displayName": "R Notebook Markdown Renderer",
+        "requiresMessaging": "always",
+        "entrypoint": {
+          "extends": "vscode.markdown-it-renderer",
+          "path": "./dist/renderer.js"
+        }
+      },
+      {
+        "id": "r-notebook-cell-options-renderer",
+        "displayName": "R Notebook Cell Options Renderer",
+        "requiresMessaging": "always",
+        "entrypoint": "./dist/optionsRenderer.js",
+        "mimeTypes": [
+          "application/vnd.r-notebook.cell-options+json"
+        ]
+      }
+    ],
+    "notebooks": [
+      {
+        "type": "r-notebook",
+        "displayName": "R Notebook Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.{Rmd,rmd,qmd}"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "r-notebook.openAsNotebook",
+        "title": "Open as R Notebook",
+        "category": "R Notebook",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "r-notebook.runCellInConsole",
+        "title": "Run Cell in R Console",
+        "category": "R Notebook",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "r-notebook.viewWorkspaceObject",
+        "title": "View in R Notebook",
+        "category": "R Notebook",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "r-notebook.editCellOptions",
+        "title": "Edit Cell Options",
+        "category": "R Notebook",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "r-notebook.restartSession",
+        "title": "Restart R Session",
+        "category": "R Notebook",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "r-notebook.reopenRunningSession",
+        "title": "Reopen Running Notebook Session...",
+        "category": "R Notebook",
+        "icon": "$(history)"
+      },
+      {
+        "command": "r-notebook.closeSessionAndNotebook",
+        "title": "Shutdown R session and close the document",
+        "shortTitle": "Shutdown and Close",
+        "category": "R Notebook",
+        "icon": "$(close-all)"
+      }
+    ],
+    "configuration": {
+      "title": "R Notebook",
+      "properties": {
+        "r.notebook.quartoPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Path to the Quarto executable. Leave empty to find Quarto on the R session's PATH."
+        },
+        "r.notebook.saveState": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Save and restore notebook results using a separate .r-notebook file beside the document. Results retained by VS Code take precedence. When disabled, existing state files are ignored and left unchanged, and no new state files are created."
+        },
+        "r.notebook.sessionShutdownDelayMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "maximum": 10080,
+          "multipleOf": 1,
+          "scope": "resource",
+          "description": "Minutes to retain an R notebook's inline session after its final notebook editor closes. Set to 0 to disable automatic shutdown."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "r-notebook.enter",
+        "key": "enter",
+        "when": "editorTextFocus && notebookType == r-notebook && editorLangId == r && !suggestWidgetVisible"
+      },
+      {
+        "command": "r-notebook.enter",
+        "key": "enter",
+        "when": "editorTextFocus && notebookType == r-notebook && editorLangId == r && suggestWidgetVisible",
+        "args": {
+          "acceptSuggestion": true
+        }
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "r-notebook.openAsNotebook",
+          "when": "false"
+        },
+        {
+          "command": "r-notebook.viewWorkspaceObject",
+          "when": "false"
+        },
+        {
+          "command": "r-notebook.editCellOptions",
+          "when": "false"
+        },
+        {
+          "command": "r-notebook.restartSession",
+          "when": "false"
+        },
+        {
+          "command": "r-notebook.closeSessionAndNotebook",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "r-notebook.viewWorkspaceObject",
+          "when": "view == workspaceViewer && viewItem == rootNode && r.notebook.activeEditor",
+          "group": "inline@0"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "r-notebook.openAsNotebook",
+          "when": "resourceExtname =~ /\\.(Rmd|rmd|qmd)$/",
+          "group": "navigation@8"
+        }
+      ],
+      "notebook/cell/execute": [
+        {
+          "command": "r-notebook.runCellInConsole",
+          "when": "notebookType == r-notebook && notebookCellType == code",
+          "group": "inline@2"
+        }
+      ],
+      "notebook/cell/title": [
+        {
+          "command": "r-notebook.editCellOptions",
+          "when": "notebookType == r-notebook && notebookCellType == code",
+          "group": "inline/cell@0"
+        },
+        {
+          "command": "r-notebook.runCellInConsole",
+          "when": "notebookType == r-notebook && notebookCellType == code",
+          "group": "run@1"
+        }
+      ],
+      "notebook/toolbar": [
+        {
+          "command": "r-notebook.restartSession",
+          "when": "notebookType == r-notebook",
+          "group": "navigation/execute@5"
+        },
+        {
+          "command": "r-notebook.closeSessionAndNotebook",
+          "when": "notebookType == r-notebook",
+          "group": "navigation/execute@6"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit -p ./",
+    "test": "npm run test:unit && npm run test:r",
+    "test:unit": "tsx --test test/**/*.test.ts",
+    "test:r": "Rscript test/r/bridge.test.R",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package:extension": "npm run check-types && node esbuild.js --production",
+    "vscode:prepublish": "npm run package:extension",
+    "package:vsix": "vsce package",
+    "package": "npm run package:vsix"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.12.2",
+    "@types/vscode": "1.85.0",
+    "@types/vscode-notebook-renderer": "^1.72.3",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.7",
+    "js-yaml": "^4.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.3.0"
+  }
+}
