@@ -23,6 +23,8 @@ import {
   VscodeRSessionRequestWatcher,
 } from "./Runtime/vscodeR";
 
+const stateSaves = new Map<string, Promise<void>>();
+
 function isNotebookCell(value: unknown): value is vscode.NotebookCell {
   return Boolean(
     value &&
@@ -79,7 +81,6 @@ function notebookForCommand(candidate?: unknown): vscode.NotebookDocument | unde
 export function activate(context: vscode.ExtensionContext): void {
   const serializer = new RNotebookSerializer();
   const output = vscode.window.createOutputChannel("R Notebook Kernel");
-  const stateSaves = new Map<string, Promise<void>>();
   const closedNotebookStates = new Map<string, NotebookState>();
   const notebookPreparations = new Map<string, Promise<void>>();
   const prepareNotebook = (
@@ -651,4 +652,10 @@ export function activate(context: vscode.ExtensionContext): void {
       output.appendLine(`[Session] Could not attach the selected notebook: ${message}`);
     }
   );
+}
+
+export async function deactivate(): Promise<void> {
+  while (stateSaves.size > 0) {
+    await Promise.all(stateSaves.values());
+  }
 }
