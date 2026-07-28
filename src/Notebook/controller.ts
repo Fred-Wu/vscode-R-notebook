@@ -28,6 +28,7 @@ interface NotebookSession {
   process: HiddenRProcess;
   bridge: RExecutionBridge;
   queue: Promise<void>;
+  startup?: Promise<void>;
   stopped: boolean;
   textRevision: number;
   closedAt?: number;
@@ -39,10 +40,23 @@ interface NotebookSession {
   };
 }
 
-interface TextRenderResult {
+type TextRenderResult = {
   html: string;
   marker: string;
   cells: Array<{ id: string; marker: string }>;
+} | {
+  waiting: string;
+};
+
+type SessionStartupMode = "background" | "onExecution" | "manual";
+
+export function sessionStartupMode(notebookUri: vscode.Uri): SessionStartupMode {
+  const configured = vscode.workspace
+    .getConfiguration("r.notebook", notebookUri)
+    .get<string>("sessionStartup", "background");
+  return configured === "onExecution" || configured === "manual"
+    ? configured
+    : "background";
 }
 
 function assertRCell(cell: vscode.NotebookCell): void {
@@ -115,6 +129,55 @@ export class RNotebookController implements vscode.Disposable {
       this.sessions.set(key, session);
     }
     return session;
+  }
+
+  private ensureSessionStarted(
+    session: NotebookSession,
+    makePreferred: boolean
+  ): Promise<void> {
+    if (session.startup) {
+      return session.startup;
+    }
+    if (session.process.processId !== undefined) {
+      return this.attachment.ensureAttached(session.process, makePreferred);
+    }
+    const startup = this.attachment
+      .ensureAttached(session.process, makePreferred)
+      .finally(() => {
+        if (session.startup === startup) {
+          session.startup = undefined;
+        }
+      });
+    session.startup = startup;
+    void vscode.window.setStatusBarMessage(
+      "$(sync~spin) Starting R session…",
+      startup
+    );
+    return startup;
+  }
+
+  async startSession(
+    notebook: vscode.NotebookDocument,
+    refreshMarkdown = false
+  ): Promise<void> {
+    if (!vscode.workspace.isTrusted) {
+      throw new Error("Trust this workspace before starting an R notebook session.");
+    }
+    if (
+      notebook.notebookType !== NOTEBOOK_TYPE ||
+      notebook.uri.scheme !== "file"
+    ) {
+      throw new Error("R notebook execution requires a local file.");
+    }
+    const session = this.getSession(notebook);
+    this.markSessionOpen(session);
+    await this.ensureSessionStarted(
+      session,
+      this.selectedNotebookKey === notebook.uri.toString()
+    );
+    if (refreshMarkdown) {
+      this.markdownStateChanged.fire(notebook);
+    }
   }
 
   private markSessionOpen(session: NotebookSession): void {
@@ -203,22 +266,59 @@ export class RNotebookController implements vscode.Disposable {
     return previous !== undefined && previous !== signature;
   }
 
-  selectNotebook(notebook: vscode.NotebookDocument | undefined): Promise<void> {
+  async selectNotebook(
+    notebook: vscode.NotebookDocument | undefined
+  ): Promise<void> {
     if (
       notebook?.notebookType !== NOTEBOOK_TYPE ||
       notebook.uri.scheme !== "file" ||
       !vscode.workspace.isTrusted
     ) {
       this.selectedNotebookKey = undefined;
-      return this.attachment.select(undefined);
+      await this.attachment.select(undefined);
+      return;
     }
-    this.selectedNotebookKey = notebook.uri.toString();
-    const session = this.getSession(notebook);
-    this.markSessionOpen(session);
-    return this.attachment.ensureAttached(session.process, true);
+    const key = notebook.uri.toString();
+    this.selectedNotebookKey = key;
+    const existingSession = this.sessions.get(key);
+    if (existingSession) {
+      this.markSessionOpen(existingSession);
+    }
+    await this.attachment.select(existingSession?.process);
+    if (sessionStartupMode(notebook.uri) === "background") {
+      await this.startSession(notebook, true);
+    }
   }
 
   private async execute(cells: readonly vscode.NotebookCell[]): Promise<void> {
+    const notebook = cells[0]?.notebook;
+    const session = notebook
+      ? this.sessions.get(notebook.uri.toString())
+      : undefined;
+    if (
+      notebook &&
+      sessionStartupMode(notebook.uri) === "manual" &&
+      !session?.startup &&
+      session?.process.processId === undefined
+    ) {
+      const start = "Start R Session";
+      if (await vscode.window.showWarningMessage(
+        "The R notebook session has not been started.",
+        start
+      ) !== start) {
+        return;
+      }
+      try {
+        await this.startSession(notebook);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(
+          `Could not start the R notebook session: ${message}`
+        );
+        return;
+      }
+    }
+
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
@@ -330,7 +430,23 @@ export class RNotebookController implements vscode.Disposable {
     ) {
       return Promise.resolve({ html: savedText.html, marker: target.marker, cells });
     }
-    const session = this.getSession(notebook);
+    const sessionKey = notebook.uri.toString();
+    let session = this.sessions.get(sessionKey);
+    const startupMode = sessionStartupMode(notebook.uri);
+    if (
+      startupMode !== "background" &&
+      !session?.startup &&
+      session?.process.processId === undefined
+    ) {
+      return Promise.resolve({
+        waiting: startupMode === "manual"
+          ? "Start the R session to render this Markdown."
+          : "Run a code cell to start the R session and render this Markdown.",
+      });
+    }
+    if (!session) {
+      session = this.getSession(notebook);
+    }
     const renderKey = `${sourceHash}:${session.textRevision}`;
     if (session.pendingTextRender?.key === renderKey) {
       return session.pendingTextRender.promise.then((html) => ({
@@ -339,15 +455,14 @@ export class RNotebookController implements vscode.Disposable {
         cells,
       }));
     }
-    const sessionKey = notebook.uri.toString();
     const task = session.queue.then(async () => {
       if (session.stopped || this.sessions.get(sessionKey) !== session) {
         throw new Error("The notebook's R session has closed.");
       }
       this.attachment.beginExecution(session.process);
       try {
-        await this.attachment.ensureAttached(
-          session.process,
+        await this.ensureSessionStarted(
+          session,
           this.selectedNotebookKey === sessionKey
         );
         const html = await session.bridge.renderText(
@@ -468,7 +583,7 @@ export class RNotebookController implements vscode.Disposable {
       }
       this.attachment.beginExecution(session.process);
       try {
-        await this.attachment.ensureAttached(session.process, true);
+        await this.ensureSessionStarted(session, true);
         await session.bridge.viewObject(objectName);
       } finally {
         if (!session.stopped) {
@@ -510,8 +625,8 @@ export class RNotebookController implements vscode.Disposable {
     this.shutdownSession(notebook.uri);
     const session = this.getSession(notebook);
     try {
-      await this.attachment.ensureAttached(
-        session.process,
+      await this.ensureSessionStarted(
+        session,
         this.selectedNotebookKey === notebook.uri.toString()
       );
       await this.updateNativeTextState(notebook, undefined);
@@ -580,8 +695,8 @@ export class RNotebookController implements vscode.Disposable {
 
       this.attachment.beginExecution(session.process);
       try {
-        await this.attachment.ensureAttached(
-          session.process,
+        await this.ensureSessionStarted(
+          session,
           this.selectedNotebookKey === cell.notebook.uri.toString()
         );
         const result = await session.bridge.execute(

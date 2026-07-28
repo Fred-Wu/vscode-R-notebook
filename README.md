@@ -15,6 +15,18 @@ Set the correct `r.rpath.*` option in vscode-R and keep its session watcher enab
 ```json
 "r.sessionWatcher": true
 ```
+
+The inline R session starts in the background when a notebook becomes active.
+Change `r.notebook.sessionStartup` when a different startup time is preferred:
+
+```json
+"r.notebook.sessionStartup": "background"
+```
+
+- `background` starts the session while the active notebook is being prepared.
+- `onExecution` starts the session when the first code cell runs.
+- `manual` shows a **Start R Session** button and never starts the session implicitly.
+
 ## Features
  - Render markdown cells as you go. 
  - Inline display R outputs and plots beneath code cell. 

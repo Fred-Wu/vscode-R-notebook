@@ -266,6 +266,14 @@ export function activate(context: vscode.ExtensionContext): void {
         optionCompletions.clear();
         markdownCompletions.clear();
       }
+      if (event.affectsConfiguration("r.notebook.sessionStartup")) {
+        const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
+        void controller.selectNotebook(activeNotebook)
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            output.appendLine(`[Session] Could not start the selected notebook: ${message}`);
+          });
+      }
     }),
     sessionRequestWatcher,
     controller.onDidChangeMarkdownState((notebook) => {
@@ -543,6 +551,19 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`Could not restart the R session: ${message}`);
+      }
+    }),
+    vscode.commands.registerCommand("r-notebook.startSession", async (candidate?: unknown) => {
+      const notebook = notebookForCommand(candidate);
+      if (!notebook) {
+        void vscode.window.showInformationMessage("Open an R Markdown or Quarto notebook first.");
+        return;
+      }
+      try {
+        await controller.startSession(notebook, true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`Could not start the R session: ${message}`);
       }
     }),
     vscode.commands.registerCommand("r-notebook.reopenRunningSession", async () => {

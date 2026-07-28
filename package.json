@@ -113,6 +113,12 @@
         "icon": "$(settings-gear)"
       },
       {
+        "command": "r-notebook.startSession",
+        "title": "Start R Session",
+        "category": "R Notebook",
+        "icon": "$(debug-start)"
+      },
+      {
         "command": "r-notebook.restartSession",
         "title": "Restart R Session",
         "category": "R Notebook",
@@ -146,6 +152,22 @@
           "default": true,
           "scope": "resource",
           "description": "Save and restore notebook results using a separate .r-notebook file beside the document. Results retained by VS Code take precedence. When disabled, existing state files are ignored and left unchanged, and no new state files are created."
+        },
+        "r.notebook.sessionStartup": {
+          "type": "string",
+          "enum": [
+            "background",
+            "onExecution",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Start the R session in the background when the notebook becomes active.",
+            "Start the R session when the first code cell runs.",
+            "Start the R session only when requested."
+          ],
+          "default": "background",
+          "scope": "resource",
+          "description": "Controls when the notebook's inline R session starts."
         },
         "r.notebook.sessionShutdownDelayMinutes": {
           "type": "number",
@@ -186,6 +208,10 @@
         {
           "command": "r-notebook.editCellOptions",
           "when": "false"
+        },
+        {
+          "command": "r-notebook.startSession",
+          "when": "r.notebook.activeEditor && config.r.notebook.sessionStartup == manual"
         },
         {
           "command": "r-notebook.restartSession",
@@ -234,6 +260,11 @@
           "command": "r-notebook.restartSession",
           "when": "notebookType == r-notebook",
           "group": "navigation/execute@5"
+        },
+        {
+          "command": "r-notebook.startSession",
+          "when": "notebookType == r-notebook && config.r.notebook.sessionStartup == manual",
+          "group": "navigation/execute@4"
         },
         {
           "command": "r-notebook.closeSessionAndNotebook",

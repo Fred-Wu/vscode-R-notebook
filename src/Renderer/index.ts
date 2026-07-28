@@ -22,6 +22,7 @@ interface RenderResponse {
   marker?: string;
   html?: string;
   cells?: Array<{ id: string; marker: string }>;
+  waiting?: string;
   error?: string;
 }
 
@@ -82,6 +83,10 @@ function applyResponse(response: RenderResponse): void {
     .map((root) => root.querySelector<HTMLElement>(selector))
     .find((element) => element !== null);
   if (!placeholder) {
+    return;
+  }
+  if (response.waiting) {
+    placeholder.title = response.waiting;
     return;
   }
   if (
@@ -192,6 +197,7 @@ function applyResponse(response: RenderResponse): void {
       element.replaceChildren(...content);
       element.id = cell.marker;
       element.className = renderedCell.className;
+      element.removeAttribute("title");
       element.removeAttribute("data-r-notebook-text-request");
       renderedSignatures.set(element, signature);
 
