@@ -620,14 +620,14 @@ export function activate(context: vscode.ExtensionContext): void {
         candidateTab.input instanceof vscode.TabInputNotebook &&
         candidateTab.input.notebookType === NOTEBOOK_TYPE &&
         candidateTab.input.uri.toString() === notebookUri.toString();
-      const tab = vscode.window.tabGroups.all
+      const tabs = vscode.window.tabGroups.all
         .flatMap((group) => group.tabs)
-        .find(matchesNotebook);
-      if (!tab) {
+        .filter(matchesNotebook);
+      if (tabs.length === 0) {
         void vscode.window.showInformationMessage("The R notebook tab is no longer open.");
         return;
       }
-      if (await vscode.window.tabGroups.close(tab)) {
+      if (await vscode.window.tabGroups.close(tabs)) {
         controller.shutdownSession(notebookUri);
       }
     })
