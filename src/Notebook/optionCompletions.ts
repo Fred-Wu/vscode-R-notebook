@@ -12,29 +12,11 @@ import {
   type OptionCompletion,
 } from "./optionSchema";
 
-const R_MARKDOWN_COMPLETIONS_EXPRESSION = [
+const R_MARKDOWN_OPTIONS_EXPRESSION = [
   'if (requireNamespace("knitr", quietly=TRUE)) {',
   "  options <- knitr::opts_chunk$get()",
   "  for (name in sort(names(options)))",
   '    cat("option\\t", name, "\\t", typeof(options[[name]]), "\\n", sep="")',
-  "}",
-  'for (package in c("rmarkdown", "bookdown")) {',
-  '  if (!requireNamespace(package, quietly=TRUE)) next',
-  '  namespace <- asNamespace(package)',
-  '  for (name in getNamespaceExports(package)) {',
-  '    fn <- get0(name, envir=namespace, mode="function", inherits=FALSE)',
-  '    if (is.null(fn)) next',
-  '    formal_values <- formals(fn)',
-  '    if ("..." %in% names(formal_values)) formal_values[["..."]] <- NULL',
-  '    required <- vapply(formal_values, identical, logical(1), quote(expr=))',
-  '    if (any(required)) next',
-  '    format <- tryCatch(',
-  '      suppressMessages(suppressWarnings(fn())),',
-  '      error=function(error) NULL',
-  '    )',
-  '    if (inherits(format, "rmarkdown_output_format"))',
-  '      cat("format\\t", package, "::", name, "\\n", sep="")',
-  '  }',
   "}",
 ].join("\n");
 
@@ -54,35 +36,19 @@ function execute(command: string, args: string[]): Promise<string> {
   });
 }
 
-interface RMarkdownCompletions {
-  options: OptionCompletion[];
-  outputFormats: string[];
-}
-
-function rMarkdownCompletions(output: string): RMarkdownCompletions {
+function rMarkdownCompletions(output: string): OptionCompletion[] {
   const completions = new Map<string, OptionCompletion>();
-  const outputFormats = new Set<string>();
   for (const line of output.split(/\r?\n/)) {
     const [kind, name, type] = line.split("\t", 3);
-    if (!name) {
-      continue;
-    }
-    if (kind === "format") {
-      outputFormats.add(name);
-      continue;
-    }
-    if (kind !== "option") {
+    if (kind !== "option" || !name) {
       continue;
     }
     completions.set(name, type === "logical"
       ? { name, values: ["TRUE", "FALSE"] }
       : { name });
   }
-  return {
-    options: [...completions.values()]
-      .sort((left, right) => left.name.localeCompare(right.name)),
-    outputFormats: [...outputFormats].sort((left, right) => left.localeCompare(right)),
-  };
+  return [...completions.values()]
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function configuredQuartoExecutable(notebookUri: vscode.Uri): string {
@@ -113,26 +79,30 @@ async function loadQuartoCompletions(quarto: string): Promise<OptionCompletion[]
 }
 
 export class CellOptionCompletionProvider {
-  private readonly rMarkdownCache = new Map<string, Promise<RMarkdownCompletions>>();
+  private readonly rMarkdownCache = new Map<string, Promise<OptionCompletion[]>>();
   private readonly quartoCache = new Map<string, Promise<OptionCompletion[]>>();
 
   constructor(private readonly output: vscode.OutputChannel) {}
 
-  load(notebookUri: vscode.Uri): Promise<CellOptionCompletions> {
-    const r = resolveRExecutable(notebookUri);
+  load(
+    notebookUri: vscode.Uri,
+    documentKind: "quarto" | "rMarkdown"
+  ): Promise<CellOptionCompletions> {
     const quarto = configuredQuartoExecutable(notebookUri);
+    if (documentKind === "quarto") {
+      return this.loadQuarto(quarto).then((quartoOptions) => ({
+        rMarkdown: [],
+        quarto: quartoOptions,
+      }));
+    }
+    const r = resolveRExecutable(notebookUri);
     return Promise.all([
       this.loadRMarkdown(r),
       this.loadQuarto(quarto),
     ]).then(([rMarkdown, quartoOptions]) => ({
-      rMarkdown: rMarkdown.options,
+      rMarkdown,
       quarto: quartoOptions,
     }));
-  }
-
-  loadRMarkdownOutputFormats(notebookUri: vscode.Uri): Promise<readonly string[]> {
-    return this.loadRMarkdown(resolveRExecutable(notebookUri))
-      .then((completions) => completions.outputFormats);
   }
 
   clear(): void {
@@ -140,15 +110,15 @@ export class CellOptionCompletionProvider {
     this.quartoCache.clear();
   }
 
-  private loadRMarkdown(rExecutable: string): Promise<RMarkdownCompletions> {
+  private loadRMarkdown(rExecutable: string): Promise<OptionCompletion[]> {
     let result = this.rMarkdownCache.get(rExecutable);
     if (!result) {
       result = execute(
         rExecutable,
-        ["--vanilla", "--slave", "-e", R_MARKDOWN_COMPLETIONS_EXPRESSION]
+        ["--vanilla", "--slave", "-e", R_MARKDOWN_OPTIONS_EXPRESSION]
       ).then(rMarkdownCompletions).catch((error: unknown) => {
         this.log("R Markdown", error);
-        return { options: [], outputFormats: [] };
+        return [];
       });
       this.rMarkdownCache.set(rExecutable, result);
     }

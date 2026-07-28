@@ -30,7 +30,7 @@ Change `r.notebook.sessionStartup` when a different startup time is preferred:
 ## Features
  - Render markdown cells as you go. 
  - Inline display R outputs and plots beneath code cell. 
- - Autocompletion options for YAML, Markdown and R code cells. 
+ - Context-aware Quarto and R Markdown suggestions from installed tools and notebook contents, with automatic suggestions in Quarto YAML headers.
  - Restore outputs and plots using a `.r-notebook` file if `Save State` setting is turned on.
  
  

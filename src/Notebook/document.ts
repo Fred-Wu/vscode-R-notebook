@@ -1,5 +1,5 @@
 export const NOTEBOOK_TYPE = "r-notebook";
-export const NATIVE_TEXT_VERSION = 10;
+export const NATIVE_TEXT_VERSION = 11;
 
 export interface NativeTextState {
   version: number;

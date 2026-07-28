@@ -865,6 +865,12 @@ r_notebook_render_text <- function(
         warn = FALSE,
         encoding = "UTF-8"
       ), collapse = "\n")
+      html <- base::gsub(
+        'href="#(?:fig|tab):([^"]+)"',
+        'href="#\\1"',
+        html,
+        perl = TRUE
+      )
     }
     html <- r_notebook_prepare_html(html)
     base::writeLines(

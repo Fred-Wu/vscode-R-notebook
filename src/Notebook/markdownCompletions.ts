@@ -9,88 +9,23 @@ import {
   configuredQuartoExecutable,
   quartoInstallationPaths,
 } from "./optionCompletions";
-
-export const markdownCompletionTriggers = [
-  ".", "$", "@", ":", "\\", "=", "/", "#", "[", "]", "(", "{", "-", "`", "*", "_", ">",
-];
-
-type MarkdownSnippet = readonly [label: string, body: string, description: string];
-
-const markdownSnippets: readonly MarkdownSnippet[] = [
-  ["bold", "**${TM_SELECTED_TEXT:${1:text}}**$0", "Bold text"],
-  ["italic", "*${TM_SELECTED_TEXT:${1:text}}*$0", "Italic text"],
-  ["strikethrough", "~~${TM_SELECTED_TEXT:${1:text}}~~$0", "Strikethrough text"],
-  ["quote", "> ${TM_SELECTED_TEXT:${1:text}}$0", "Block quote"],
-  ["inline code", "`${TM_SELECTED_TEXT:${1:code}}`$0", "Inline code"],
-  ["fenced code block", "```${1:language}\n${2:${TM_SELECTED_TEXT}}\n```\n$0", "Fenced code block"],
-  ["heading", "# ${TM_SELECTED_TEXT:${1:Heading}}$0", "Heading"],
-  ["unordered list", "- ${1:first}\n- ${2:second}\n- ${3:third}\n$0", "Unordered list"],
-  ["ordered list", "1. ${1:first}\n2. ${2:second}\n3. ${3:third}\n$0", "Ordered list"],
-  ["task list", "- [ ] ${1:first}\n- [ ] ${2:second}\n$0", "Task list"],
-  ["link", "[${1:text}](${2:path})$0", "Link"],
-  ["image", "![${1:alt}](${2:path})$0", "Image"],
-  ["table", "| ${1:Column 1} | ${2:Column 2} |\n| --- | --- |\n| ${3:value} | ${4:value} |\n$0", "Table"],
-  ["footnote", "[^${1:id}]$0", "Footnote reference"],
-  ["citation", "[@${1:key}]$0", "Pandoc citation"],
-  ["inline math", "\\$${1:expression}\\$$0", "Inline equation"],
-  ["display math", "\\$\\$\n${1:expression}\n\\$\\$\n$0", "Display equation"],
-  ["div", "::: {${1:.class}}\n${TM_SELECTED_TEXT:${2:Content}}\n:::\n$0", "Pandoc Div"],
-  ["span", "[${TM_SELECTED_TEXT:${1:text}}]{${2:.class}}$0", "Pandoc span"],
-];
-
-const quartoSnippets: readonly MarkdownSnippet[] = [
-  ["Quarto callout", "::: {.callout-${1|note,tip,important,warning,caution|}}\n## ${2:Title}\n\n${3:Content}\n:::\n$0", "Quarto callout"],
-  ["Quarto shortcode", "{{< ${1:shortcode} >}}$0", "Quarto shortcode"],
-  ["Quarto cross-reference", "@${1:fig-label}$0", "Quarto cross-reference"],
-  ["Quarto columns", "::: {.columns}\n::: {.column}\n${1:Left}\n:::\n::: {.column}\n${2:Right}\n:::\n:::\n$0", "Quarto columns"],
-  ["Quarto R code cell", "```{r}\n${1}\n```\n$0", "Executable R code cell"],
-  ["Quarto inline R", "`r ${1:expression}`$0", "Inline R expression"],
-];
-
-const rMarkdownSnippets: readonly MarkdownSnippet[] = [
-  ["R Markdown code chunk", "```{r ${1:label}}\n${2}\n```\n$0", "R code chunk"],
-  ["R Markdown inline R", "`r ${1:expression}`$0", "Inline R expression"],
-  ["R Markdown figure reference", "\\@ref(fig:${1:label})$0", "Bookdown figure reference"],
-  ["R Markdown table reference", "\\@ref(tab:${1:label})$0", "Bookdown table reference"],
-  ["R Markdown tabset", "## ${1:Heading} {.tabset}\n\n### ${2:Tab}\n\n${3:Content}\n$0", "R Markdown tabset"],
-];
-
-interface RMarkdownFrontMatterField {
-  name: string;
-  description: string;
-  values?: readonly string[];
-  block?: boolean;
-}
-
-const rMarkdownFrontMatterFields: readonly RMarkdownFrontMatterField[] = [
-  { name: "abstract", description: "Document abstract" },
-  { name: "always_allow_html", description: "Allow HTML dependencies in non-HTML output", values: ["true", "false"] },
-  { name: "author", description: "Document author" },
-  { name: "bibliography", description: "Bibliography file" },
-  { name: "csl", description: "Citation style file" },
-  { name: "date", description: "Document date" },
-  { name: "description", description: "Document description" },
-  { name: "header-includes", description: "Content added to the document header", block: true },
-  { name: "keywords", description: "Document keywords", block: true },
-  { name: "knit", description: "Custom knit function" },
-  { name: "lang", description: "Document language" },
-  { name: "link-citations", description: "Link citations to bibliography entries", values: ["true", "false"] },
-  { name: "nocite", description: "Bibliography entries included without citation" },
-  { name: "output", description: "R Markdown output format", block: true },
-  { name: "pagetitle", description: "HTML page title" },
-  { name: "params", description: "Parameterized report values", block: true },
-  { name: "resource_files", description: "Additional files required by the document", block: true },
-  { name: "runtime", description: "Document runtime", values: ["static", "shiny", "shiny_prerendered"] },
-  { name: "site", description: "R Markdown site generator" },
-  { name: "subtitle", description: "Document subtitle" },
-  { name: "title", description: "Document title" },
-];
+import {
+  inspectQuartoFormats,
+  mergeQuartoFormats,
+  quartoCompletionDocumentation,
+  quartoFormatApplies,
+  quartoFrontMatterFormatContext,
+  type QuartoFormatInspection as InspectedQuartoFormats,
+  type QuartoFrontMatterFormats,
+  type QuartoFormats,
+} from "./quartoFormats";
 
 interface QuartoCompletion {
   type?: "key" | "value";
   display?: string;
   value: string;
   description?: string;
+  schema?: unknown;
   suggest_on_accept?: boolean;
 }
 
@@ -127,54 +62,71 @@ interface QuartoAttributeGroup {
 interface QuartoEditorSupport {
   editor: QuartoEditorModule;
   attributes: QuartoAttributeGroup[];
+  schemas: Record<string, unknown>;
+}
+
+interface CachedQuartoInspection {
+  formats: InspectedQuartoFormats;
+  frontMatter: QuartoFrontMatterFormats;
 }
 
 export class RNotebookMarkdownCompletionProvider implements
   vscode.CompletionItemProvider,
   vscode.Disposable {
-  private readonly modules = new Map<string, Promise<QuartoEditorSupport | undefined>>();
+  private readonly quartoModules =
+    new Map<string, Promise<QuartoEditorSupport | undefined>>();
+  private readonly quartoInspections =
+    new Map<string, Promise<CachedQuartoInspection>>();
+  private readonly quartoInspectionErrors = new Set<string>();
+  private readonly yamlCompletionChanges: vscode.Disposable;
 
-  constructor(
-    private readonly output: vscode.OutputChannel,
-    private readonly loadRMarkdownOutputFormats: (
-      notebookUri: vscode.Uri
-    ) => Promise<readonly string[]>
-  ) {}
+  constructor(private readonly output: vscode.OutputChannel) {
+    this.yamlCompletionChanges = vscode.workspace.onDidChangeTextDocument((event) => {
+      const change = event.contentChanges[0];
+      if (
+        event.reason !== undefined ||
+        event.contentChanges.length !== 1 ||
+        !change?.text ||
+        [...change.text].length !== 1
+      ) {
+        return;
+      }
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.uri.toString() !== event.document.uri.toString()) {
+        return;
+      }
+      const context = this.markupContext(event.document);
+      const position = event.document.positionAt(
+        event.document.offsetAt(change.range.start) + change.text.length
+      );
+      if (
+        !context ||
+        !context.isQuarto ||
+        !this.isFrontMatterPosition(context.cell, event.document, position) ||
+        !this.startsYamlCompletionToken(
+          event.document,
+          position,
+          change.text
+        )
+      ) {
+        return;
+      }
+      void vscode.commands.executeCommand("editor.action.triggerSuggest");
+    });
+  }
 
   async provideCompletionItems(
     document: vscode.TextDocument,
     position: vscode.Position,
-    token: vscode.CancellationToken,
-    context: vscode.CompletionContext
+    token: vscode.CancellationToken
   ): Promise<vscode.CompletionList> {
-    const documentKey = document.uri.toString();
-    const notebook = vscode.workspace.notebookDocuments.find((candidate) =>
-      candidate.notebookType === NOTEBOOK_TYPE &&
-      candidate.getCells().some((cell) =>
-        cell.document.uri.toString() === documentKey
-      )
-    );
-    const cell = notebook?.getCells().find((candidate) =>
-      candidate.document.uri.toString() === documentKey
-    );
-    if (!notebook || !cell || cell.kind !== vscode.NotebookCellKind.Markup) {
+    const context = this.markupContext(document);
+    if (!context) {
       return new vscode.CompletionList();
     }
-
+    const { notebook, cell, isQuarto } = context;
     const source = document.getText();
-    const sourceOffset = document.offsetAt(position);
-    const opening = cell.index === 0
-      ? /^---[ \t]*(?:\r\n|\n|\r)/.exec(source)
-      : undefined;
-    const closing = opening
-      ? /^(?:---|\.\.\.)[ \t]*(?:\r\n|\n|\r|$)/m.exec(source.slice(opening[0].length))
-      : undefined;
-    const inYaml = Boolean(
-      opening &&
-      sourceOffset >= opening[0].length &&
-      (!closing || sourceOffset <= opening[0].length + closing.index)
-    );
-    const isQuarto = notebook.uri.path.toLowerCase().endsWith(".qmd");
+    const inYaml = this.isFrontMatterPosition(cell, document, position);
 
     if (!inYaml) {
       const referenceItems = this.referenceCompletions(
@@ -185,40 +137,40 @@ export class RNotebookMarkdownCompletionProvider implements
       );
       const pathItems = await this.pathCompletions(notebook, document, position);
       const currentLine = document.lineAt(position.line).text;
-      const support = isQuarto && (currentLine.includes("{") || /^\s*:{3,}/.test(currentLine))
-        ? await this.loadQuarto(notebook.uri)
-        : undefined;
-      const attributeItems = support
-        ? this.attributeCompletions(support.attributes, document, position)
-        : [];
-      const contextualItems = [...referenceItems, ...pathItems, ...attributeItems];
-      if (contextualItems.length > 0) {
-        return new vscode.CompletionList(contextualItems, false);
+      if (!isQuarto || (
+        !currentLine.includes("{") &&
+        !/^\s*:{3,}/.test(currentLine)
+      )) {
+        return new vscode.CompletionList([...referenceItems, ...pathItems], false);
       }
-      if (context.triggerKind === vscode.CompletionTriggerKind.TriggerCharacter) {
-        return new vscode.CompletionList();
+      const [support, formats] = await Promise.all([
+        this.loadQuarto(notebook.uri),
+        this.quartoFormats(notebook),
+      ]);
+      if (!support || token.isCancellationRequested) {
+        return new vscode.CompletionList([...referenceItems, ...pathItems], false);
       }
-      const formatSnippets = isQuarto ? quartoSnippets : rMarkdownSnippets;
-      const items = [...formatSnippets, ...markdownSnippets].map(([label, body, description], index) => {
-        const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
-        item.insertText = new vscode.SnippetString(body);
-        item.detail = description;
-        item.sortText = index < formatSnippets.length ? `0${index}` : `1${index}`;
-        return item;
-      });
-      return new vscode.CompletionList(items, false);
-    }
-
-    if (!isQuarto) {
-      const items = await this.rMarkdownYamlCompletions(
-        notebook.uri,
+      const attributeItems = this.attributeCompletions(
+        support.attributes,
+        formats,
         document,
         position
       );
-      return new vscode.CompletionList(items, false);
+      return new vscode.CompletionList([
+        ...referenceItems,
+        ...pathItems,
+        ...attributeItems,
+      ], false);
     }
 
-    const support = await this.loadQuarto(notebook.uri);
+    if (!isQuarto) {
+      return new vscode.CompletionList();
+    }
+
+    const [support, formats] = await Promise.all([
+      this.loadQuarto(notebook.uri),
+      this.quartoFormats(notebook),
+    ]);
     if (!support || token.isCancellationRequested) {
       return new vscode.CompletionList();
     }
@@ -229,8 +181,8 @@ export class RNotebookMarkdownCompletionProvider implements
       path: notebook.uri.fsPath,
       position: { row: position.line, column: position.character },
       line,
-      formats: [],
-      project_formats: [],
+      formats: formats.document,
+      project_formats: formats.project,
       client: "vscode",
     });
     if (!completion || token.isCancellationRequested) {
@@ -255,8 +207,12 @@ export class RNotebookMarkdownCompletionProvider implements
         : candidate.value;
       item.range = range;
       item.filterText = candidate.value;
-      if (candidate.description) {
-        item.documentation = new vscode.MarkdownString(candidate.description);
+      const documentation = quartoCompletionDocumentation(
+        candidate,
+        support.schemas
+      );
+      if (documentation) {
+        item.documentation = new vscode.MarkdownString(documentation);
       }
       if (candidate.suggest_on_accept) {
         item.command = { command: "editor.action.triggerSuggest", title: "Suggest" };
@@ -267,143 +223,158 @@ export class RNotebookMarkdownCompletionProvider implements
   }
 
   clear(): void {
-    this.modules.clear();
+    this.quartoModules.clear();
+    this.invalidateQuartoFormats();
+  }
+
+  prepareQuarto(notebook: vscode.NotebookDocument): void {
+    if (
+      notebook.notebookType !== NOTEBOOK_TYPE ||
+      !notebook.uri.path.toLowerCase().endsWith(".qmd")
+    ) {
+      return;
+    }
+    void Promise.all([
+      this.loadQuarto(notebook.uri),
+      this.quartoFormats(notebook),
+    ]);
+  }
+
+  invalidateQuartoFormats(): void {
+    this.quartoInspections.clear();
+    this.quartoInspectionErrors.clear();
   }
 
   dispose(): void {
-    this.modules.clear();
+    this.yamlCompletionChanges.dispose();
+    this.quartoModules.clear();
+    this.invalidateQuartoFormats();
   }
 
-  private async rMarkdownYamlCompletions(
-    notebookUri: vscode.Uri,
+  private startsYamlCompletionToken(
     document: vscode.TextDocument,
-    position: vscode.Position
-  ): Promise<vscode.CompletionItem[]> {
-    const outputItems = await this.rMarkdownOutputCompletions(
-      notebookUri,
-      document,
-      position
-    );
-    if (outputItems) {
-      return outputItems;
+    position: vscode.Position,
+    insertedText: string
+  ): boolean {
+    if (!insertedText.trim()) {
+      return false;
     }
-
-    const beforeCursor = document.lineAt(position.line).text.slice(0, position.character);
-    const valueMatch = /^([A-Za-z][\w-]*):\s*([\w-]*)$/.exec(beforeCursor);
-    if (valueMatch?.[1] && valueMatch[2] !== undefined) {
-      const field = rMarkdownFrontMatterFields.find(({ name }) => name === valueMatch[1]);
-      const valueToken = valueMatch[2];
-      if (!field?.values) {
-        return [];
-      }
-      const range = new vscode.Range(
-        position.line,
-        position.character - valueToken.length,
-        position.line,
-        position.character
-      );
-      return field.values
-        .filter((value) => value.startsWith(valueToken.toLowerCase()))
-        .map((value) => {
-          const item = new vscode.CompletionItem(value, vscode.CompletionItemKind.Value);
-          item.range = range;
-          return item;
-        });
-    }
-
-    const fieldMatch = /^([A-Za-z-]*)$/.exec(beforeCursor);
-    if (!fieldMatch?.[1] && beforeCursor.length > 0) {
-      return [];
-    }
-    const fieldToken = fieldMatch?.[1] ?? "";
-    const range = new vscode.Range(
-      position.line,
-      position.character - fieldToken.length,
-      position.line,
+    const beforeCursor = document.lineAt(position.line).text.slice(
+      0,
       position.character
     );
-    return rMarkdownFrontMatterFields
-      .filter(({ name }) => name.startsWith(fieldToken.toLowerCase()))
-      .map((field) => {
-        const item = new vscode.CompletionItem(field.name, vscode.CompletionItemKind.Field);
-        item.insertText = field.block
-          ? new vscode.SnippetString(`${field.name}:\n  $0`)
-          : `${field.name}: `;
-        item.range = range;
-        item.detail = field.description;
-        if (field.name === "output" || field.values) {
-          item.command = { command: "editor.action.triggerSuggest", title: "Suggest" };
-        }
-        return item;
-      });
+    const beforeInsertion = beforeCursor.slice(0, -insertedText.length);
+    return (
+      /^\s*$/.test(beforeInsertion) ||
+      /:\s*$/.test(beforeInsertion) ||
+      /^\s*-\s+$/.test(beforeInsertion) ||
+      /[\[,{]\s*$/.test(beforeInsertion)
+    );
   }
 
-  private async rMarkdownOutputCompletions(
-    notebookUri: vscode.Uri,
-    document: vscode.TextDocument,
-    position: vscode.Position
-  ): Promise<vscode.CompletionItem[] | undefined> {
-    const beforeCursor = document.lineAt(position.line).text.slice(0, position.character);
-    const sameLine = /^\s*output:\s*([\w:.-]*)$/.exec(beforeCursor);
-    let token = sameLine?.[1];
-    let mappingValue = false;
-    if (token === undefined) {
-      const indentation = /^\s*/.exec(beforeCursor)?.[0].length ?? 0;
-      if (indentation === 0) {
-        return undefined;
-      }
-      for (let line = position.line - 1; line >= 0; line -= 1) {
-        const text = document.lineAt(line).text;
-        if (text.trim().length === 0) {
-          continue;
-        }
-        const parentIndentation = /^\s*/.exec(text)?.[0].length ?? 0;
-        if (parentIndentation >= indentation) {
-          continue;
-        }
-        if (!/^\s*output:\s*(?:#.*)?$/.test(text)) {
-          return undefined;
-        }
-        token = /[\w:.-]*$/.exec(beforeCursor)?.[0] ?? "";
-        mappingValue = true;
-        break;
-      }
-    }
-    if (token === undefined) {
+  private markupContext(document: vscode.TextDocument): {
+    notebook: vscode.NotebookDocument;
+    cell: vscode.NotebookCell;
+    isQuarto: boolean;
+  } | undefined {
+    const documentKey = document.uri.toString();
+    const notebook = vscode.workspace.notebookDocuments.find((candidate) =>
+      candidate.notebookType === NOTEBOOK_TYPE &&
+      candidate.getCells().some((cell) =>
+        cell.document.uri.toString() === documentKey
+      )
+    );
+    const cell = notebook?.getCells().find((candidate) =>
+      candidate.document.uri.toString() === documentKey
+    );
+    if (!notebook || !cell || cell.kind !== vscode.NotebookCellKind.Markup) {
       return undefined;
     }
+    return {
+      notebook,
+      cell,
+      isQuarto: notebook.uri.path.toLowerCase().endsWith(".qmd"),
+    };
+  }
 
-    const formats = await this.loadRMarkdownOutputFormats(notebookUri);
-    const range = new vscode.Range(
-      position.line,
-      position.character - token.length,
-      position.line,
-      position.character
+  private isFrontMatterPosition(
+    cell: vscode.NotebookCell,
+    document: vscode.TextDocument,
+    position: vscode.Position
+  ): boolean {
+    if (cell.index !== 0) {
+      return false;
+    }
+    const source = document.getText();
+    const opening = /^---[ \t]*(?:\r\n|\n|\r)/.exec(source);
+    if (!opening) {
+      return false;
+    }
+    const sourceOffset = document.offsetAt(position);
+    const closing = /^(?:---|\.\.\.)[ \t]*(?:\r\n|\n|\r|$)/m.exec(
+      source.slice(opening[0].length)
     );
-    return formats
-      .filter((name) => {
-        const normalizedToken = token.toLowerCase();
-        const shortName = name.split("::").at(-1) ?? name;
-        return name.toLowerCase().startsWith(normalizedToken) ||
-          shortName.toLowerCase().startsWith(normalizedToken);
-      })
-      .map((name) => {
-        const item = new vscode.CompletionItem(
-          name,
-          vscode.CompletionItemKind.Value
+    return sourceOffset >= opening[0].length && (
+      !closing ||
+      sourceOffset <= opening[0].length + closing.index
+    );
+  }
+
+  private async quartoFormats(notebook: vscode.NotebookDocument): Promise<QuartoFormats> {
+    const firstCell = notebook.getCells()[0];
+    const document = firstCell?.kind === vscode.NotebookCellKind.Markup
+      ? firstCell.document
+      : undefined;
+    const frontMatter = document
+      ? quartoFrontMatterFormatContext(document.getText())
+      : { specified: false, formats: [] };
+    if (notebook.uri.scheme !== "file") {
+      return {
+        document: frontMatter.specified ? frontMatter.formats : ["html"],
+        project: [],
+      };
+    }
+
+    const executable = configuredQuartoExecutable(notebook.uri);
+    const inspectionKey = `${executable}\0${notebook.uri.fsPath}`;
+    let inspection = this.quartoInspections.get(inspectionKey);
+    if (!inspection) {
+      inspection = Promise.all([
+        inspectQuartoFormats(executable, notebook.uri.fsPath),
+        fs.promises.readFile(notebook.uri.fsPath, "utf8"),
+      ]).then(([formats, source]) => ({
+        formats,
+        frontMatter: quartoFrontMatterFormatContext(source),
+      }));
+      this.quartoInspections.set(inspectionKey, inspection);
+    }
+    try {
+      const inspected = await inspection;
+      return mergeQuartoFormats(
+        frontMatter,
+        inspected.frontMatter,
+        inspected.formats
+      );
+    } catch (error) {
+      if (!this.quartoInspectionErrors.has(inspectionKey)) {
+        const message = error instanceof Error
+          ? error.message
+          : String(error);
+        this.output.appendLine(
+          `[Markdown completion] Could not inspect Quarto formats: ${message}`
         );
-        item.insertText = mappingValue
-          ? `${name}: default`
-          : name;
-        item.range = range;
-        item.filterText = `${name.split("::").at(-1) ?? name} ${name}`;
-        item.detail = "Installed R Markdown output format";
-        return item;
-      });
+        this.quartoInspectionErrors.add(inspectionKey);
+      }
+    }
+    return {
+      document: frontMatter.specified ? frontMatter.formats : ["html"],
+      project: [],
+    };
   }
 
   private attributeCompletions(
     groups: readonly QuartoAttributeGroup[],
+    formats: QuartoFormats,
     document: vscode.TextDocument,
     position: vscode.Position
   ): vscode.CompletionItem[] {
@@ -453,7 +424,10 @@ export class RNotebookMarkdownCompletionProvider implements
       if (
         !Array.isArray(group.contexts) ||
         !group.contexts.includes(context) ||
-        (Array.isArray(group.formats) && group.formats.length > 0) ||
+        !quartoFormatApplies(
+          Array.isArray(group.formats) ? group.formats : [],
+          formats
+        ) ||
         (typeof group.filter === "string" && !new RegExp(group.filter).test(attributes)) ||
         !Array.isArray(group.completions)
       ) {
@@ -653,18 +627,35 @@ export class RNotebookMarkdownCompletionProvider implements
 
   private loadQuarto(notebookUri: vscode.Uri): Promise<QuartoEditorSupport | undefined> {
     const executable = configuredQuartoExecutable(notebookUri);
-    let result = this.modules.get(executable);
+    let result = this.quartoModules.get(executable);
     if (!result) {
       result = quartoInstallationPaths(executable).then(async (installedPaths) => {
         for (const installedPath of installedPaths) {
           const modulePath = path.join(installedPath, "editor", "tools", "vs-code.mjs");
           const attributesPath = path.join(installedPath, "editor", "tools", "attrs.yml");
-          if (fs.existsSync(modulePath) && fs.existsSync(attributesPath)) {
+          const schemasPath = path.join(
+            installedPath,
+            "editor",
+            "tools",
+            "yaml",
+            "all-schema-definitions.json"
+          );
+          if (
+            fs.existsSync(modulePath) &&
+            fs.existsSync(attributesPath) &&
+            fs.existsSync(schemasPath)
+          ) {
             const editor = await import(pathToFileURL(modulePath).href) as QuartoEditorModule;
-            const parsed = loadYaml(await fs.promises.readFile(attributesPath, "utf8"));
+            const [parsed, schemas] = await Promise.all([
+              fs.promises.readFile(attributesPath, "utf8").then(loadYaml),
+              fs.promises.readFile(schemasPath, "utf8").then(JSON.parse),
+            ]);
             return {
               editor,
               attributes: Array.isArray(parsed) ? parsed as QuartoAttributeGroup[] : [],
+              schemas: schemas && typeof schemas === "object" && !Array.isArray(schemas)
+                ? schemas as Record<string, unknown>
+                : {},
             };
           }
         }
@@ -674,7 +665,7 @@ export class RNotebookMarkdownCompletionProvider implements
         this.output.appendLine(`[Markdown completion] Could not load Quarto: ${message}`);
         return undefined;
       });
-      this.modules.set(executable, result);
+      this.quartoModules.set(executable, result);
     }
     return result;
   }

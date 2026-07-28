@@ -402,7 +402,7 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     documentPath
   );
   assert.match(nativeRMarkdownHtml, /id="r-notebook-markdown-first"/);
-  assert.match(nativeRMarkdownHtml, /href="#fig:aplot"/);
+  assert.match(nativeRMarkdownHtml, /href="#aplot"/);
   assert.match(nativeRMarkdownHtml, /href="#sec-rmarkdown"/);
   assert.match(nativeRMarkdownHtml, /Section\s+<a href="#sec-rmarkdown">1<\/a>/);
   assert.match(nativeRMarkdownHtml, /value\s+<strong>42<\/strong>/);
@@ -419,7 +419,7 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     rMarkdownCellStart,
     rMarkdownCellEnd
   );
-  assert.match(rMarkdownCellHtml, /href="#fig:aplot"/);
+  assert.match(rMarkdownCellHtml, /href="#aplot"/);
   assert.match(rMarkdownCellHtml, /href="#sec-rmarkdown"/);
   assert.match(rMarkdownCellHtml, /<math display="inline"/);
   assert.match(rMarkdownCellHtml, /<math display="block"/);
@@ -475,7 +475,7 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     figureReferenceNative.source,
     documentPath
   );
-  assert.match(figureReferenceHtml, /href="#fig:fig-test">1<\/a>/);
+  assert.match(figureReferenceHtml, /href="#fig-test">1<\/a>/);
   assert.doesNotMatch(figureReferenceHtml, />\?\?<\/a>/);
 
   const textProjectDirectory = path.join(directory, "text-project");

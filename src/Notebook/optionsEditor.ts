@@ -29,7 +29,8 @@ export class CellOptionsEditor implements vscode.Disposable {
   constructor(
     private readonly messaging: vscode.NotebookRendererMessaging,
     private readonly loadCompletions: (
-      notebookUri: vscode.Uri
+      notebookUri: vscode.Uri,
+      documentKind: "quarto" | "rMarkdown"
     ) => Promise<CellOptionCompletions>
   ) {
     this.receiver = messaging.onDidReceiveMessage(({ editor, message }) => {
@@ -56,10 +57,13 @@ export class CellOptionsEditor implements vscode.Disposable {
     }
     const fields = chunkHeaderFields(header, chunk.engine);
     const quartoFields = quartoOptionFields(cell.document.getText());
-    const completions = await this.loadCompletions(cell.notebook.uri);
     const documentKind = path.extname(cell.notebook.uri.fsPath).toLowerCase() === ".qmd"
       ? "quarto"
       : "rMarkdown";
+    const completions = await this.loadCompletions(
+      cell.notebook.uri,
+      documentKind
+    );
     const optionStyle = documentKind === "quarto" ||
       (!fields.label && !fields.options && (quartoFields.label || quartoFields.options))
       ? "quarto"

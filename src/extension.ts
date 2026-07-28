@@ -8,10 +8,7 @@ import { RNotebookEditing } from "./Notebook/editing";
 import { CellOptionCompletionProvider } from "./Notebook/optionCompletions";
 import { CellOptionsEditor } from "./Notebook/optionsEditor";
 import { codeCellLabel } from "./Notebook/options";
-import {
-  markdownCompletionTriggers,
-  RNotebookMarkdownCompletionProvider,
-} from "./Notebook/markdownCompletions";
+import { RNotebookMarkdownCompletionProvider } from "./Notebook/markdownCompletions";
 import { RMarkdownCellStatusBarProvider } from "./Notebook/statusBar";
 import { RNotebookSerializer } from "./Notebook/serializer";
 import {
@@ -217,16 +214,26 @@ export function activate(context: vscode.ExtensionContext): void {
     "r-notebook-cell-options-renderer"
   );
   const optionCompletions = new CellOptionCompletionProvider(output);
-  const markdownCompletions = new RNotebookMarkdownCompletionProvider(
-    output,
-    (notebookUri) => optionCompletions.loadRMarkdownOutputFormats(notebookUri)
+  const markdownCompletions = new RNotebookMarkdownCompletionProvider(output);
+  const quartoConfigurationWatcher = vscode.workspace.createFileSystemWatcher(
+    "**/*.{yml,yaml}"
   );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
-    (notebookUri) => optionCompletions.load(notebookUri)
+    (notebookUri, documentKind) =>
+      optionCompletions.load(notebookUri, documentKind)
   );
   const cellStatusBar = new RMarkdownCellStatusBarProvider();
   const consoleTransport = new RConsoleTransport();
+  const refreshQuartoCompletions = (): void => {
+    markdownCompletions.invalidateQuartoFormats();
+    vscode.workspace.notebookDocuments.forEach((notebook) =>
+      markdownCompletions.prepareQuarto(notebook)
+    );
+  };
+  vscode.workspace.notebookDocuments.forEach((notebook) =>
+    markdownCompletions.prepareQuarto(notebook)
+  );
 
   context.subscriptions.push(
     vscode.workspace.registerNotebookSerializer(NOTEBOOK_TYPE, serializer, {
@@ -249,10 +256,13 @@ export function activate(context: vscode.ExtensionContext): void {
     cellOptionsEditor,
     cellStatusBar,
     markdownCompletions,
+    quartoConfigurationWatcher,
+    quartoConfigurationWatcher.onDidChange(refreshQuartoCompletions),
+    quartoConfigurationWatcher.onDidCreate(refreshQuartoCompletions),
+    quartoConfigurationWatcher.onDidDelete(refreshQuartoCompletions),
     vscode.languages.registerCompletionItemProvider(
-      { notebookType: NOTEBOOK_TYPE },
-      markdownCompletions,
-      ...markdownCompletionTriggers
+      { language: "markdown", notebookType: NOTEBOOK_TYPE },
+      markdownCompletions
     ),
     vscode.notebooks.registerNotebookCellStatusBarItemProvider(
       NOTEBOOK_TYPE,
@@ -265,6 +275,9 @@ export function activate(context: vscode.ExtensionContext): void {
       ) {
         optionCompletions.clear();
         markdownCompletions.clear();
+        vscode.workspace.notebookDocuments.forEach((notebook) =>
+          markdownCompletions.prepareQuarto(notebook)
+        );
       }
       if (event.affectsConfiguration("r.notebook.sessionStartup")) {
         const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
@@ -354,6 +367,7 @@ export function activate(context: vscode.ExtensionContext): void {
         stateEnabled(notebook.uri),
         retainedState
       );
+      markdownCompletions.prepareQuarto(notebook);
     }),
     vscode.workspace.onDidCloseNotebookDocument((notebook) => {
       if (notebook.notebookType !== NOTEBOOK_TYPE) {
