@@ -10,6 +10,10 @@ const FAKE_R_PROCESS = String.raw`
 const fs = require("node:fs");
 let state = "missing";
 let input = "";
+process.on("SIGINT", () => {
+  const marker = process.env.INTERRUPT_MARKER;
+  if (marker) fs.writeFileSync(marker, "interrupted");
+});
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   input += chunk;
@@ -120,4 +124,44 @@ test("reports when an initialised R process starts and stops", async (t) => {
   await assert.rejects(failure.failure, /exited with code 9/);
   failure.dispose();
   assert.deepEqual(runningStates, [true, false]);
+});
+
+test("interrupts work without replacing the hidden process", async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-interrupt-test-"));
+  const markerPath = path.join(directory, "interrupted.txt");
+  const resultPath = path.join(directory, "result.txt");
+  const hiddenProcess = new HiddenRProcess(
+    async () => ({
+      executable: process.execPath,
+      args: ["-e", FAKE_R_PROCESS],
+      cwd: directory,
+      env: { ...process.env, INTERRUPT_MARKER: markerPath },
+      initialization: {
+        command: "init",
+        successMarker: "READY ",
+        failureMarker: "FAILED ",
+      },
+    }),
+    () => undefined
+  );
+  t.after(() => {
+    hiddenProcess.dispose();
+    return fsPromises.rm(directory, { recursive: true, force: true });
+  });
+
+  await hiddenProcess.reattach();
+  const processId = hiddenProcess.processId;
+  assert.ok(processId);
+  (await hiddenProcess.send("set preserved")).dispose();
+
+  const interrupted = waitForFile(markerPath);
+  hiddenProcess.interrupt();
+  await interrupted;
+
+  const written = waitForFile(resultPath);
+  const dispatch = await hiddenProcess.send(`write ${resultPath}`);
+  await written;
+  dispatch.dispose();
+  assert.equal(hiddenProcess.processId, processId);
+  assert.equal(await fsPromises.readFile(resultPath, "utf8"), "preserved");
 });

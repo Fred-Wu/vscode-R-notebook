@@ -299,26 +299,20 @@ export class RExecutionBridge {
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
-      if (token.isCancellationRequested) {
-        this.transport.interrupt();
-        return { success: false, outputs: [] };
-      }
-      let rejectCancellation: ((error: Error) => void) | undefined;
-      const cancellationFailure = new Promise<never>((_resolve, reject) => {
-        rejectCancellation = reject;
-      });
-      cancellation = token.onCancellationRequested(() => {
+      const interrupt = (): void => {
+        if (cancelled) {
+          return;
+        }
         cancelled = true;
         this.transport.interrupt();
-        rejectCancellation?.(new Error("The notebook cell execution was cancelled."));
-      });
-      try {
-        await Promise.race([completion.promise, dispatch.failure, cancellationFailure]);
-      } catch (error) {
-        if (cancelled) {
-          return { success: false, outputs: [] };
-        }
-        throw error;
+      };
+      cancellation = token.onCancellationRequested(interrupt);
+      if (token.isCancellationRequested) {
+        interrupt();
+      }
+      await Promise.race([completion.promise, dispatch.failure]);
+      if (cancelled) {
+        return { success: false, outputs: [] };
       }
       return await readResult(requestDirectory);
     } finally {

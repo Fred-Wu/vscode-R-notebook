@@ -16,6 +16,48 @@ const neverCancelled = {
   onCancellationRequested: () => ({ dispose: () => undefined }),
 } as unknown as vscode.CancellationToken;
 
+function cancellableToken(): {
+  token: vscode.CancellationToken;
+  cancel(): void;
+} {
+  let cancelled = false;
+  const listeners = new Set<() => void>();
+  return {
+    token: {
+      get isCancellationRequested() {
+        return cancelled;
+      },
+      onCancellationRequested: (listener: () => void) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    } as unknown as vscode.CancellationToken,
+    cancel: () => {
+      cancelled = true;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+  };
+}
+
+function waitForFile(filePath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const watcher = fs.watch(path.dirname(filePath), () => {
+      void fsPromises.access(filePath).then(finish, () => undefined);
+    });
+    const finish = (): void => {
+      watcher.close();
+      resolve();
+    };
+    watcher.on("error", (error) => {
+      watcher.close();
+      reject(error);
+    });
+    void fsPromises.access(filePath).then(finish, () => undefined);
+  });
+}
+
 function outputText(result: Awaited<ReturnType<RExecutionBridge["execute"]>>): string {
   return result.outputs
     .map((output) => Buffer.from(output.data).toString("utf8"))
@@ -263,6 +305,30 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     neverCancelled
   );
   assert.equal(assignment.success, true);
+
+  const processIdBeforeCancellation = firstProcess.processId;
+  const cancellationMarker = path.join(directory, "cancellation-started");
+  const cancellation = cancellableToken();
+  const cancelledExecution = firstBridge.execute(
+    rmdChunk([
+      `base::writeLines("started", ${JSON.stringify(cancellationMarker)})`,
+      "repeat base::Sys.sleep(1)",
+    ].join("\n")),
+    documentPath,
+    cancellation.token
+  );
+  await waitForFile(cancellationMarker);
+  cancellation.cancel();
+  const cancelledResult = await cancelledExecution;
+  assert.equal(cancelledResult.success, false);
+  assert.deepEqual(cancelledResult.outputs, []);
+  assert.equal(firstProcess.processId, processIdBeforeCancellation);
+  const preservedAfterCancellation = await firstBridge.execute(
+    rmdChunk("notebook_process_value"),
+    documentPath,
+    neverCancelled
+  );
+  assert.match(outputText(preservedAfterCancellation), /41/);
 
   await firstBridge.execute(
     rmdChunk("workspace_view_value <- data.frame(x = 1:3)"),

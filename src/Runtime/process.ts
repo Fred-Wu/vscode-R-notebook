@@ -35,6 +35,10 @@ function exitError(code: number | null, signal: NodeJS.Signals | null): Error {
   return new Error("The inline R process stopped before the notebook cell finished.");
 }
 
+function isRunning(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
 export class HiddenRProcess implements InlineRTransport {
   private child: ChildProcessWithoutNullStreams | undefined;
   private starting: Promise<ChildProcessWithoutNullStreams> | undefined;
@@ -50,7 +54,7 @@ export class HiddenRProcess implements InlineRTransport {
 
   get processId(): number | undefined {
     const child = this.child;
-    return child && child.exitCode === null && !child.killed
+    return child && isRunning(child)
       ? this.rProcessId
       : undefined;
   }
@@ -222,7 +226,7 @@ export class HiddenRProcess implements InlineRTransport {
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
         this.clearProcess(child);
-        if (child.exitCode === null) {
+        if (isRunning(child)) {
           child.kill();
         }
         throw error;
@@ -238,7 +242,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (this.starting) {
       return await this.starting;
     }
-    if (this.child && this.child.exitCode === null && !this.child.killed) {
+    if (this.child && isRunning(this.child)) {
       return this.child;
     }
     this.starting = this.launch();
@@ -253,7 +257,7 @@ export class HiddenRProcess implements InlineRTransport {
   }
 
   async reattach(): Promise<number> {
-    const existing = !this.starting && this.child && this.child.exitCode === null && !this.child.killed
+    const existing = !this.starting && this.child && isRunning(this.child)
       ? this.child
       : undefined;
     const child = await this.getProcess();
@@ -279,8 +283,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (
       this.disposed ||
       !child ||
-      child.exitCode !== null ||
-      child.killed ||
+      !isRunning(child) ||
       this.rProcessId !== expectedProcessId ||
       !initialization
     ) {
@@ -290,8 +293,7 @@ export class HiddenRProcess implements InlineRTransport {
     const processId = await this.initialize(child, initialization);
     if (
       this.child !== child ||
-      child.exitCode !== null ||
-      child.killed ||
+      !isRunning(child) ||
       processId !== expectedProcessId
     ) {
       throw new Error("The inline R process changed during vscode-R reattachment.");
@@ -365,8 +367,8 @@ export class HiddenRProcess implements InlineRTransport {
 
   interrupt(): void {
     const child = this.child;
-    if (child && child.exitCode === null) {
-      child.kill();
+    if (child && isRunning(child)) {
+      child.kill("SIGINT");
     }
   }
 
@@ -383,7 +385,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (wasRunning) {
       this.runningChanged(false);
     }
-    if (child && child.exitCode === null) {
+    if (child && isRunning(child)) {
       child.stdin.end();
       child.kill();
     }
