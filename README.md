@@ -10,11 +10,10 @@ Open R Markdown (`.rmd`) and Quarto (`.qmd`) files as VS Code notebooks, render 
 - [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console)
 - Quarto CLI for `.qmd` files
 
-Set the correct `r.rpath.*` option in vscode-R and keep its session watcher enabled:
-
-```json
-"r.sessionWatcher": true
-```
+Set the correct `r.rpath.*` option in vscode-R. Its `r.sessionWatcher` setting is
+optional: inline code and rendering work without it. Enable the session watcher
+when the inline session should appear in vscode-R features such as the workspace
+and data viewers. Reload VS Code after changing this setting.
 
 The inline R session starts in the background when a notebook becomes active.
 Change `r.notebook.sessionStartup` when a different startup time is preferred:

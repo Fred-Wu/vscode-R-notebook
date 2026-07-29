@@ -195,12 +195,21 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     }),
     () => undefined
   );
+  const plainProcess = new HiddenRProcess(
+    async () => ({
+      ...(await launchOptions()),
+      env: { ...process.env, R_PROFILE_USER: emptyProfilePath },
+      initialization: undefined,
+    }),
+    () => undefined
+  );
   t.after(() => {
     firstProcess.dispose();
     secondProcess.dispose();
     delayedPackageProcess.dispose();
     fallbackProcess.dispose();
     failedProcess.dispose();
+    plainProcess.dispose();
     return fsPromises.rm(directory, { recursive: true, force: true });
   });
 
@@ -209,6 +218,7 @@ test("the R bridge attaches once, persists state, and isolates processes", async
   const secondBridge = new RExecutionBridge(helperPath, secondProcess);
   const delayedPackageBridge = new RExecutionBridge(helperPath, delayedPackageProcess);
   const fallbackBridge = new RExecutionBridge(helperPath, fallbackProcess);
+  const plainBridge = new RExecutionBridge(helperPath, plainProcess);
   const workingDirectoryArtifacts: string[] = [];
   const workingDirectoryWatcher = fs.watch(directory, (_event, filename) => {
     const name = filename?.toString() ?? "";
@@ -220,6 +230,16 @@ test("the R bridge attaches once, persists state, and isolates processes", async
 
   await firstProcess.reattach();
   await secondProcess.reattach();
+
+  const plainExecution = await plainBridge.execute(
+    rmdChunk("plain_notebook_value <- 23\nplain_notebook_value"),
+    documentPath,
+    neverCancelled
+  );
+  assert.equal(plainExecution.success, true);
+  assert.match(outputText(plainExecution), /23/);
+  assert.equal(plainProcess.running, true);
+  assert.equal(plainProcess.processId, undefined);
 
   const firstExecutionSuppression = await firstBridge.execute(
     rmdChunk([

@@ -81,61 +81,61 @@ export function quartoExecutableSetting(notebookUri: vscode.Uri): string {
 
 async function launchOptions(
   notebookUri: vscode.Uri,
-  output: vscode.OutputChannel
+  output: vscode.OutputChannel,
+  sessionIntegrationEnabled: boolean
 ): Promise<HiddenRLaunchOptions> {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  const sessionWatcher = vscode.workspace
-    .getConfiguration("r")
-    .get<boolean>("sessionWatcher", true);
-  if (!sessionWatcher) {
-    throw new Error(
-      "Inline R requires r.sessionWatcher to be enabled. Enable it and reload VS Code."
-    );
-  }
-
   const rExtension = vscode.extensions.getExtension(VSCODE_R_EXTENSION_ID);
   if (!rExtension) {
-    throw new Error("vscode-R is required to attach the inline notebook R session.");
-  }
-  await rExtension.activate();
-  const profilePath = path.join(rExtension.extensionPath, "R", "session", "profile.R");
-  const initPath = path.join(rExtension.extensionPath, "R", "session", "init.R");
-  if (!fs.existsSync(profilePath) || !fs.existsSync(initPath)) {
-    throw new Error("The installed vscode-R session bootstrap files could not be found.");
+    throw new Error("vscode-R is required to start the inline notebook R session.");
   }
   const fileWorkspace = vscode.workspace.getWorkspaceFolder(notebookUri);
   const startupDirectory = fileWorkspace
     ? path.dirname(notebookUri.fsPath)
     : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 
-  env.R_PROFILE_USER_OLD = process.env.R_PROFILE_USER ?? "";
-  env.R_PROFILE_USER = profilePath;
-  env.VSCODE_INIT_R = "";
-  env.VSCODE_R_NOTEBOOK_INIT_R = initPath;
-  env.VSCODE_WATCHER_DIR = path.join(os.homedir(), ".vscode-R");
-  env.VSCODE_R_NOTEBOOK_SESSION_WD = startupDirectory;
+  delete env.VSCODE_INIT_R;
+  delete env.VSCODE_WATCHER_DIR;
   env.TERM_PROGRAM = "vscode";
-  output.appendLine(
-    `[${path.basename(notebookUri.fsPath)}] Starting automatic vscode-R session attachment.`
-  );
+
+  let initialization: HiddenRLaunchOptions["initialization"];
+  if (sessionIntegrationEnabled) {
+    await rExtension.activate();
+    const profilePath = path.join(rExtension.extensionPath, "R", "session", "profile.R");
+    const initPath = path.join(rExtension.extensionPath, "R", "session", "init.R");
+    if (!fs.existsSync(profilePath) || !fs.existsSync(initPath)) {
+      throw new Error("The installed vscode-R session bootstrap files could not be found.");
+    }
+    env.R_PROFILE_USER_OLD = process.env.R_PROFILE_USER ?? "";
+    env.R_PROFILE_USER = profilePath;
+    env.VSCODE_INIT_R = "";
+    env.VSCODE_R_NOTEBOOK_INIT_R = initPath;
+    env.VSCODE_WATCHER_DIR = path.join(os.homedir(), ".vscode-R");
+    env.VSCODE_R_NOTEBOOK_SESSION_WD = startupDirectory;
+    initialization = createVscodeRAttachmentInitialization();
+    output.appendLine(
+      `[${path.basename(notebookUri.fsPath)}] Starting automatic vscode-R session attachment.`
+    );
+  }
 
   return {
     executable: resolveRExecutable(notebookUri),
     args: ["--quiet", "--no-save", "--no-restore", "--interactive"],
     cwd: startupDirectory,
     env,
-    initialization: createVscodeRAttachmentInitialization(),
+    initialization,
   };
 }
 
 export function createInlineRProcess(
   notebookUri: vscode.Uri,
   output: vscode.OutputChannel,
-  runningChanged?: (running: boolean) => void
+  runningChanged: ((running: boolean) => void) | undefined,
+  sessionIntegrationEnabled: boolean
 ): HiddenRProcess {
   const notebookName = path.basename(notebookUri.fsPath);
   return new HiddenRProcess(
-    () => launchOptions(notebookUri, output),
+    () => launchOptions(notebookUri, output, sessionIntegrationEnabled),
     (message) => output.appendLine(`[${notebookName}] ${message}`),
     runningChanged
   );

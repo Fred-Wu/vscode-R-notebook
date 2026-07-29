@@ -58,7 +58,12 @@ test("keeps state in one hidden process and isolates different processes", async
     cwd: directory,
     env: { ...process.env },
   });
-  const first = new HiddenRProcess(launchOptions, () => undefined);
+  const firstRunningStates: boolean[] = [];
+  const first = new HiddenRProcess(
+    launchOptions,
+    () => undefined,
+    (running) => firstRunningStates.push(running)
+  );
   const second = new HiddenRProcess(launchOptions, () => undefined);
   t.after(() => {
     first.dispose();
@@ -68,6 +73,9 @@ test("keeps state in one hidden process and isolates different processes", async
 
   (await first.send("set first-session")).dispose();
   (await second.send("set second-session")).dispose();
+  assert.equal(first.running, true);
+  assert.equal(first.processId, undefined);
+  assert.deepEqual(firstRunningStates, [true]);
 
   const firstResult = path.join(directory, "first.txt");
   const secondResult = path.join(directory, "second.txt");
@@ -85,6 +93,7 @@ test("keeps state in one hidden process and isolates different processes", async
 
   const stopped = await first.send("set stopping");
   first.dispose();
+  assert.deepEqual(firstRunningStates, [true, false]);
   await assert.rejects(stopped.failure, /stopped|exited/);
   stopped.dispose();
   await assert.rejects(first.send("set unavailable"), /session has closed/);

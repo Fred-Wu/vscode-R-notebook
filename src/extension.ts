@@ -186,35 +186,44 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
   let controller: RNotebookController;
-  const sessionRequestWatcher = new VscodeRSessionRequestWatcher(
-    async (request) => {
-      const workspaceDirectories = vscode.workspace.workspaceFolders?.map(
-        (folder) => folder.uri.fsPath
-      );
-      if (
-        isVscodeRWorkingDirectoryAccepted(
-          request.workingDirectory,
-          workspaceDirectories
-        )
-      ) {
-        await controller.handleVscodeRSessionRequest(request);
-        return true;
-      }
-      return false;
-    },
-    (message) => output.appendLine(message)
-  );
+  const sessionIntegrationEnabled = vscode.workspace
+    .getConfiguration("r")
+    .get<boolean>("sessionWatcher", true);
+  const sessionRequestWatcher = sessionIntegrationEnabled
+    ? new VscodeRSessionRequestWatcher(
+      async (request) => {
+        const workspaceDirectories = vscode.workspace.workspaceFolders?.map(
+          (folder) => folder.uri.fsPath
+        );
+        if (
+          isVscodeRWorkingDirectoryAccepted(
+            request.workingDirectory,
+            workspaceDirectories
+          )
+        ) {
+          await controller.handleVscodeRSessionRequest(request);
+          return true;
+        }
+        return false;
+      },
+      (message) => output.appendLine(message)
+    )
+    : undefined;
   controller = new RNotebookController(
     context.asAbsolutePath("resources/r/execute.R"),
     output,
-    () => sessionRequestWatcher.synchronize(),
+    () => sessionRequestWatcher?.synchronize() ?? Promise.resolve(undefined),
     () => {
+      if (!sessionRequestWatcher) {
+        return async () => undefined;
+      }
       const attachmentCheckpoint = sessionRequestWatcher.attachmentCheckpoint();
       return (processId) => sessionRequestWatcher.waitForAttachment(
         processId,
         attachmentCheckpoint
       );
-    }
+    },
+    sessionIntegrationEnabled
   );
   const editing = new RNotebookEditing();
   const markdownMessaging = vscode.notebooks.createRendererMessaging(
@@ -234,7 +243,7 @@ export function activate(context: vscode.ExtensionContext): void {
       optionCompletions.load(notebookUri, documentKind)
   );
   const cellStatusBar = new RMarkdownCellStatusBarProvider();
-  const consoleTransport = new RConsoleTransport();
+  const consoleTransport = new RConsoleTransport(sessionIntegrationEnabled);
   const updateSessionContext = (
     notebook = vscode.window.activeNotebookEditor?.notebook
   ): Thenable<unknown> => vscode.commands.executeCommand(
@@ -320,7 +329,6 @@ export function activate(context: vscode.ExtensionContext): void {
           });
       }
     }),
-    sessionRequestWatcher,
     controller.onDidChangeMarkdownState((notebook) => {
       for (const editor of vscode.window.visibleNotebookEditors) {
         if (editor.notebook === notebook) {
@@ -510,7 +518,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       void controller.selectNotebook(editor?.notebook).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        output.appendLine(`[Session] Could not attach the selected notebook: ${message}`);
+        output.appendLine(`[Session] Could not start the selected notebook session: ${message}`);
       });
     }),
     vscode.window.onDidCloseTerminal((terminal) => {
@@ -693,6 +701,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
+  if (sessionRequestWatcher) {
+    context.subscriptions.push(sessionRequestWatcher);
+  }
 
   for (const notebook of vscode.workspace.notebookDocuments) {
     if (notebook.notebookType !== NOTEBOOK_TYPE) {
@@ -710,7 +721,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void controller.selectNotebook(vscode.window.activeNotebookEditor?.notebook).catch(
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      output.appendLine(`[Session] Could not attach the selected notebook: ${message}`);
+      output.appendLine(`[Session] Could not start the selected notebook session: ${message}`);
     }
   );
 }

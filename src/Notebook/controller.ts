@@ -101,7 +101,8 @@ export class RNotebookController implements vscode.Disposable {
     private readonly helperPath: string,
     private readonly output: vscode.OutputChannel,
     private readonly synchronizeSessionRequests: () => Promise<string | undefined>,
-    beginSessionAttachment: () => (processId: number) => Promise<void>
+    beginSessionAttachment: () => (processId: number) => Promise<void>,
+    private readonly sessionIntegrationEnabled: boolean
   ) {
     this.attachment = new InlineAttachmentCoordinator(beginSessionAttachment);
     this.controller = vscode.notebooks.createNotebookController(
@@ -118,11 +119,16 @@ export class RNotebookController implements vscode.Disposable {
     const key = notebook.uri.toString();
     let session = this.sessions.get(key);
     if (!session) {
-      const process = createInlineRProcess(notebook.uri, this.output, () => {
-        if (this.sessions.get(key)?.process === process) {
-          this.sessionStateChanged.fire(notebook.uri);
-        }
-      });
+      const process = createInlineRProcess(
+        notebook.uri,
+        this.output,
+        () => {
+          if (this.sessions.get(key)?.process === process) {
+            this.sessionStateChanged.fire(notebook.uri);
+          }
+        },
+        this.sessionIntegrationEnabled
+      );
       session = {
         uri: notebook.uri,
         process,
@@ -147,11 +153,13 @@ export class RNotebookController implements vscode.Disposable {
     if (session.startup) {
       return session.startup;
     }
-    if (session.process.processId !== undefined) {
-      return this.attachment.ensureAttached(session.process, makePreferred);
+    const start = this.sessionIntegrationEnabled
+      ? this.attachment.ensureAttached(session.process, makePreferred)
+      : session.process.start();
+    if (session.process.running) {
+      return start;
     }
-    const startup = this.attachment
-      .ensureAttached(session.process, makePreferred)
+    const startup = start
       .finally(() => {
         if (session.startup === startup) {
           session.startup = undefined;
@@ -259,7 +267,7 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   hasRunningSession(notebookUri: vscode.Uri): boolean {
-    return this.sessions.get(notebookUri.toString())?.process.processId !== undefined;
+    return this.sessions.get(notebookUri.toString())?.process.running ?? false;
   }
 
   prefer(notebook: vscode.NotebookDocument): void {
@@ -316,7 +324,7 @@ export class RNotebookController implements vscode.Disposable {
       notebook &&
       sessionStartupMode(notebook.uri) === "manual" &&
       !session?.startup &&
-      session?.process.processId === undefined
+      !session?.process.running
     ) {
       const start = "Start R Session";
       if (await vscode.window.showWarningMessage(
@@ -459,7 +467,7 @@ export class RNotebookController implements vscode.Disposable {
     if (
       startupMode !== "background" &&
       !session?.startup &&
-      session?.process.processId === undefined
+      !session?.process.running
     ) {
       return Promise.resolve({
         waiting: startupMode === "manual"

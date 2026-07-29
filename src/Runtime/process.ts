@@ -44,6 +44,7 @@ export class HiddenRProcess implements InlineRTransport {
   private starting: Promise<ChildProcessWithoutNullStreams> | undefined;
   private currentInitialization: HiddenRLaunchOptions["initialization"] | undefined;
   private rProcessId: number | undefined;
+  private ready = false;
   private disposed = false;
 
   constructor(
@@ -59,12 +60,17 @@ export class HiddenRProcess implements InlineRTransport {
       : undefined;
   }
 
+  get running(): boolean {
+    return this.ready && !!this.child && isRunning(this.child);
+  }
+
   private clearProcess(child: ChildProcessWithoutNullStreams): void {
     if (this.child === child) {
-      const wasRunning = this.rProcessId !== undefined;
+      const wasRunning = this.ready;
       this.child = undefined;
       this.currentInitialization = undefined;
       this.rProcessId = undefined;
+      this.ready = false;
       if (wasRunning) {
         this.runningChanged(false);
       }
@@ -222,7 +228,6 @@ export class HiddenRProcess implements InlineRTransport {
       this.currentInitialization = options.initialization;
       try {
         this.rProcessId = await this.initialize(child, options.initialization);
-        this.runningChanged(true);
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
         this.clearProcess(child);
@@ -232,6 +237,8 @@ export class HiddenRProcess implements InlineRTransport {
         throw error;
       }
     }
+    this.ready = true;
+    this.runningChanged(true);
     return child;
   }
 
@@ -254,6 +261,10 @@ export class HiddenRProcess implements InlineRTransport {
         this.starting = undefined;
       }
     }
+  }
+
+  async start(): Promise<void> {
+    await this.getProcess();
   }
 
   async reattach(): Promise<number> {
@@ -378,10 +389,11 @@ export class HiddenRProcess implements InlineRTransport {
     }
     this.disposed = true;
     const child = this.child;
-    const wasRunning = this.rProcessId !== undefined;
+    const wasRunning = this.ready;
     this.child = undefined;
     this.currentInitialization = undefined;
     this.rProcessId = undefined;
+    this.ready = false;
     if (wasRunning) {
       this.runningChanged(false);
     }

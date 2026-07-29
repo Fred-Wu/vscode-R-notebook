@@ -10,6 +10,8 @@ function isRConsoleTerminal(terminal: vscode.Terminal): boolean {
 export class RConsoleTransport {
   private readonly notebookConsoles = new Map<string, vscode.Terminal>();
 
+  constructor(private readonly sessionIntegrationEnabled: boolean) {}
+
   private async activateConsole(): Promise<void> {
     const extension = vscode.extensions.getExtension(R_CONSOLE_EXTENSION_ID);
     if (!extension) {
@@ -47,9 +49,11 @@ export class RConsoleTransport {
     codes: readonly string[]
   ): Promise<void> {
     const terminal = await this.getConsole(notebookUri);
-    // vscode-R follows the most recently attached R process. Reclaim the
-    // console session before submitting notebook code after inline execution.
-    terminal.sendText(ATTACH_VSCODE_R_SESSION, true);
+    if (this.sessionIntegrationEnabled) {
+      // vscode-R follows the most recently attached R process. Reclaim the
+      // console session before submitting notebook code after inline execution.
+      terminal.sendText(ATTACH_VSCODE_R_SESSION, true);
+    }
     for (const source of codes) {
       terminal.sendText(source, true);
     }
