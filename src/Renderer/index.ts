@@ -30,8 +30,8 @@ interface RefreshRequest {
   type: "rNotebook.refreshText";
 }
 
-const loadedScripts = new Set<string>();
 const renderedSignatures = new WeakMap<HTMLElement, string>();
+let responseApplication = Promise.resolve();
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -62,6 +62,35 @@ function liveScript(source: HTMLScriptElement): HTMLScriptElement {
   return script;
 }
 
+async function replaceHeadScripts(nativeDocument: Document): Promise<void> {
+  for (const script of document.head.querySelectorAll(
+    "script[data-r-notebook-native-script]"
+  )) {
+    script.remove();
+  }
+
+  for (const source of nativeDocument.head.querySelectorAll("script")) {
+    const script = liveScript(source);
+    script.dataset.rNotebookNativeScript = "";
+    const type = (script.getAttribute("type") ?? "").trim().toLowerCase();
+    const executable = type === "" ||
+      type === "module" ||
+      type.includes("javascript") ||
+      type.includes("ecmascript");
+    const waitForExecution = !script.hasAttribute("nomodule") &&
+      executable &&
+      (script.hasAttribute("src") || type === "module");
+    const execution = waitForExecution
+      ? new Promise<void>((resolve) => {
+          script.addEventListener("load", () => resolve(), { once: true });
+          script.addEventListener("error", () => resolve(), { once: true });
+        })
+      : undefined;
+    document.head.appendChild(script);
+    await execution;
+  }
+}
+
 function requestText(
   element: HTMLElement,
   markupId: string,
@@ -77,7 +106,7 @@ function requestText(
   });
 }
 
-function applyResponse(response: RenderResponse): void {
+async function applyResponse(response: RenderResponse): Promise<void> {
   const selector = `[data-r-notebook-text-request="${CSS.escape(response.requestId)}"]`;
   const placeholder = roots()
     .map((root) => root.querySelector<HTMLElement>(selector))
@@ -143,6 +172,7 @@ function applyResponse(response: RenderResponse): void {
     (element) => element.outerHTML
   ).join("\n");
   const styledRoots = new Set<Document | ShadowRoot>();
+  const updatedElements: HTMLElement[] = [];
 
   for (const root of roots()) {
     for (const element of root.querySelectorAll<HTMLElement>(
@@ -200,18 +230,14 @@ function applyResponse(response: RenderResponse): void {
       element.removeAttribute("title");
       element.removeAttribute("data-r-notebook-text-request");
       renderedSignatures.set(element, signature);
-
-      for (const source of element.querySelectorAll("script")) {
-        source.replaceWith(liveScript(source));
-      }
+      updatedElements.push(element);
     }
   }
 
-  for (const source of nativeDocument.head.querySelectorAll("script")) {
-    const key = source.src || source.textContent || "";
-    if (key && !loadedScripts.has(key)) {
-      loadedScripts.add(key);
-      document.head.appendChild(liveScript(source));
+  await replaceHeadScripts(nativeDocument);
+  for (const element of updatedElements) {
+    for (const source of element.querySelectorAll("script")) {
+      source.replaceWith(liveScript(source));
     }
   }
 }
@@ -230,7 +256,13 @@ export const activate: ActivationFunction = async (context) => {
       response.type === "rNotebook.textResult" &&
       typeof response.requestId === "string"
     ) {
-      applyResponse(response as RenderResponse);
+      responseApplication = responseApplication
+        .then(() => applyResponse(response as RenderResponse))
+        .catch((error: unknown) => {
+          console.error(
+            error instanceof Error ? error.message : String(error)
+          );
+        });
       return;
     }
     if (response.type === "rNotebook.refreshText") {
