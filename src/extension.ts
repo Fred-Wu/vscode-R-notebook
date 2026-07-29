@@ -116,6 +116,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const textEditorDocuments = new Set<string>();
   const isNativeSource = (uri: vscode.Uri): boolean =>
     uri.scheme === "file" && /\.(?:qmd|rmd)$/i.test(uri.fsPath);
+  const sourceEditorUri = (input: unknown): vscode.Uri | undefined => {
+    const uri = input instanceof vscode.TabInputText ||
+        input instanceof vscode.TabInputCustom
+      ? input.uri
+      : undefined;
+    return uri && isNativeSource(uri) ? uri : undefined;
+  };
+  const hasOpenSourceEditor = (key: string): boolean =>
+    vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some((tab) => sourceEditorUri(tab.input)?.toString() === key)
+    );
   const queueStateSave = (uri: vscode.Uri, save: () => Promise<void>): void => {
     const key = uri.toString();
     const task = (stateSaves.get(key) ?? Promise.resolve())
@@ -144,11 +155,9 @@ export function activate(context: vscode.ExtensionContext): void {
     queueStateSave(notebook.uri, () => serializer.saveState(snapshot));
   };
   const activeSourceEditorUri = (): vscode.Uri | undefined => {
-    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    const uri = input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom
-      ? input.uri
-      : undefined;
-    return uri && isNativeSource(uri) ? uri : undefined;
+    return sourceEditorUri(
+      vscode.window.tabGroups.activeTabGroup.activeTab?.input
+    );
   };
   let activeSourceEditorKey = activeSourceEditorUri()?.toString();
   if (activeSourceEditorKey) {
@@ -253,6 +262,12 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     controller,
     controller.onDidChangeNotebookState(saveNotebookState),
+    controller.onDidShutdownSession((uri) => {
+      const key = uri.toString();
+      if (!hasOpenSourceEditor(key)) {
+        closedNotebookStates.delete(key);
+      }
+    }),
     editing,
     cellOptionsEditor,
     cellStatusBar,
@@ -375,12 +390,20 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const snapshot = serializer.captureState(notebook);
-      closedNotebookStates.set(notebook.uri.toString(), snapshot.state);
+      const key = notebook.uri.toString();
       if (
         notebook.uri.scheme === "file" &&
         stateEnabled(notebook.uri)
       ) {
         queueStateSave(notebook.uri, () => serializer.saveState(snapshot));
+        closedNotebookStates.delete(key);
+      } else if (
+        hasOpenSourceEditor(key) ||
+        controller.hasSession(notebook.uri)
+      ) {
+        closedNotebookStates.set(key, snapshot.state);
+      } else {
+        closedNotebookStates.delete(key);
       }
     }),
     vscode.workspace.onDidSaveNotebookDocument(saveNotebookState),
@@ -413,9 +436,29 @@ export function activate(context: vscode.ExtensionContext): void {
           tab.input.notebookType === NOTEBOOK_TYPE
         ) {
           controller.notebookTabOpened(tab.input.uri);
+          const key = tab.input.uri.toString();
+          if (textEditorDocuments.delete(key)) {
+            const notebook = vscode.workspace.notebookDocuments.find(
+              (document) => document.notebookType === NOTEBOOK_TYPE &&
+                document.uri.toString() === key
+            );
+            if (notebook) {
+              prepareNotebook(notebook, stateEnabled(notebook.uri));
+            }
+          }
         }
       }
       for (const tab of closed) {
+        const sourceUri = sourceEditorUri(tab.input);
+        if (sourceUri) {
+          const key = sourceUri.toString();
+          if (!hasOpenSourceEditor(key)) {
+            textEditorDocuments.delete(key);
+            if (!controller.hasSession(sourceUri)) {
+              closedNotebookStates.delete(key);
+            }
+          }
+        }
         if (
           !(tab.input instanceof vscode.TabInputNotebook) ||
           tab.input.notebookType !== NOTEBOOK_TYPE

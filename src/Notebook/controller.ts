@@ -88,6 +88,8 @@ export class RNotebookController implements vscode.Disposable {
   readonly onDidChangeMarkdownState = this.markdownStateChanged.event;
   private readonly notebookStateChanged = new vscode.EventEmitter<vscode.NotebookDocument>();
   readonly onDidChangeNotebookState = this.notebookStateChanged.event;
+  private readonly sessionShutdown = new vscode.EventEmitter<vscode.Uri>();
+  readonly onDidShutdownSession = this.sessionShutdown.event;
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
   private executionOrder = 0;
@@ -243,6 +245,10 @@ export class RNotebookController implements vscode.Disposable {
         uri: session.uri,
         shutdownAt: session.shutdownAt,
       }));
+  }
+
+  hasSession(notebookUri: vscode.Uri): boolean {
+    return this.sessions.has(notebookUri.toString());
   }
 
   prefer(notebook: vscode.NotebookDocument): void {
@@ -612,6 +618,7 @@ export class RNotebookController implements vscode.Disposable {
     }
     this.attachment.forget(session.process);
     session.process.dispose();
+    this.sessionShutdown.fire(notebookUri);
   }
 
   async restartSession(notebook: vscode.NotebookDocument): Promise<boolean> {
@@ -754,6 +761,7 @@ export class RNotebookController implements vscode.Disposable {
     this.attachment.dispose();
     this.markdownStateChanged.dispose();
     this.notebookStateChanged.dispose();
+    this.sessionShutdown.dispose();
     this.controller.dispose();
   }
 }
