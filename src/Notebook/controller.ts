@@ -6,7 +6,7 @@ import {
   NATIVE_TEXT_VERSION,
   codeCellSource,
   serializeDocument,
-  type NativeTextState,
+  type NativeTextCache,
   type ParsedCell,
   type RNotebookCellMetadata,
   type RNotebookDocumentMetadata,
@@ -44,6 +44,7 @@ type TextRenderResult = {
   html: string;
   marker: string;
   cells: Array<{ id: string; marker: string }>;
+  newDocument: boolean;
 } | {
   waiting: string;
 };
@@ -384,24 +385,24 @@ export class RNotebookController implements vscode.Disposable {
     };
   }
 
-  private async updateNativeTextState(
+  private async updateNativeTextCache(
     notebook: vscode.NotebookDocument,
-    state?: NativeTextState
+    cache?: NativeTextCache
   ): Promise<void> {
     const metadata = notebook.metadata as RNotebookDocumentMetadata;
-    const current = metadata.rNotebookState;
+    const current = metadata.rNotebookTextCache;
     if (
-      (!state && !current) ||
-      (state && current?.version === state.version &&
-        current.sourceHash === state.sourceHash && current.html === state.html)
+      (!cache && !current) ||
+      (cache && current?.version === cache.version &&
+        current.sourceHash === cache.sourceHash && current.html === cache.html)
     ) {
       return;
     }
     const updated = { ...notebook.metadata } as RNotebookDocumentMetadata;
-    if (state) {
-      updated.rNotebookState = state;
+    if (cache) {
+      updated.rNotebookTextCache = cache;
     } else {
-      delete updated.rNotebookState;
+      delete updated.rNotebookTextCache;
     }
     const edit = new vscode.WorkspaceEdit();
     edit.set(notebook.uri, [vscode.NotebookEdit.updateNotebookMetadata(updated)]);
@@ -438,13 +439,19 @@ export class RNotebookController implements vscode.Disposable {
       return Promise.reject(new Error("The Markdown cell is no longer available."));
     }
     const cells = nativeDocument.cells.map(({ id, marker }) => ({ id, marker }));
-    const savedText = (notebook.metadata as RNotebookDocumentMetadata).rNotebookState;
+    const cachedText = (notebook.metadata as RNotebookDocumentMetadata)
+      .rNotebookTextCache;
     if (
-      savedText?.version === NATIVE_TEXT_VERSION &&
-      savedText.sourceHash === sourceHash &&
-      savedText.html.includes(`id="${target.marker}"`)
+      cachedText?.version === NATIVE_TEXT_VERSION &&
+      cachedText.sourceHash === sourceHash &&
+      cachedText.html.includes(`id="${target.marker}"`)
     ) {
-      return Promise.resolve({ html: savedText.html, marker: target.marker, cells });
+      return Promise.resolve({
+        html: cachedText.html,
+        marker: target.marker,
+        cells,
+        newDocument: false,
+      });
     }
     const sessionKey = notebook.uri.toString();
     let session = this.sessions.get(sessionKey);
@@ -469,6 +476,7 @@ export class RNotebookController implements vscode.Disposable {
         html,
         marker: target.marker,
         cells,
+        newDocument: true,
       }));
     }
     const task = session.queue.then(async () => {
@@ -487,7 +495,7 @@ export class RNotebookController implements vscode.Disposable {
           notebook.uri.fsPath
         );
         if (notebookSourceHash(this.notebookContext(notebook).source) === sourceHash) {
-          await this.updateNativeTextState(notebook, {
+          await this.updateNativeTextCache(notebook, {
             version: NATIVE_TEXT_VERSION,
             sourceHash,
             html,
@@ -515,6 +523,7 @@ export class RNotebookController implements vscode.Disposable {
       html,
       marker: target.marker,
       cells,
+      newDocument: true,
     }));
   }
 
@@ -566,7 +575,7 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   async refreshMarkdown(notebook: vscode.NotebookDocument): Promise<void> {
-    await this.updateNativeTextState(notebook, undefined);
+    await this.updateNativeTextCache(notebook, undefined);
     this.markdownStateChanged.fire(notebook);
   }
 
@@ -647,7 +656,7 @@ export class RNotebookController implements vscode.Disposable {
         session,
         this.selectedNotebookKey === notebook.uri.toString()
       );
-      await this.updateNativeTextState(notebook, undefined);
+      await this.updateNativeTextCache(notebook, undefined);
       const restarted = this.sessions.get(notebook.uri.toString()) === session;
       if (restarted) {
         this.markdownStateChanged.fire(notebook);
@@ -733,7 +742,7 @@ export class RNotebookController implements vscode.Disposable {
           return;
         }
         session.textRevision += 1;
-        await this.updateNativeTextState(cell.notebook, undefined);
+        await this.updateNativeTextCache(cell.notebook, undefined);
         this.markdownStateChanged.fire(cell.notebook);
         await execution.replaceOutput(result.outputs.map(bridgeOutputToNotebook));
         success = result.success && !execution.token.isCancellationRequested;

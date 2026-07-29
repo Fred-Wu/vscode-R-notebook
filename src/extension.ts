@@ -266,7 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       transientDocumentMetadata: {
         rNotebook: true,
-        rNotebookState: true,
+        rNotebookTextCache: true,
       },
     }),
     output,

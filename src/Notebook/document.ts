@@ -1,7 +1,7 @@
 export const NOTEBOOK_TYPE = "r-notebook";
 export const NATIVE_TEXT_VERSION = 11;
 
-export interface NativeTextState {
+export interface NativeTextCache {
   version: number;
   sourceHash: string;
   html: string;
@@ -28,7 +28,7 @@ export interface RNotebookCellMetadata {
 
 export interface RNotebookDocumentMetadata {
   rNotebook?: { eol?: string };
-  rNotebookState?: NativeTextState;
+  rNotebookTextCache?: NativeTextCache;
 }
 
 interface ParsedDocument {

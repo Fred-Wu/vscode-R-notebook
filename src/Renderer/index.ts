@@ -22,6 +22,7 @@ interface RenderResponse {
   marker?: string;
   html?: string;
   cells?: Array<{ id: string; marker: string }>;
+  newDocument?: boolean;
   waiting?: string;
   error?: string;
 }
@@ -32,6 +33,7 @@ interface RefreshRequest {
 
 const renderedSignatures = new WeakMap<HTMLElement, string>();
 let responseApplication = Promise.resolve();
+let headScriptsLoaded = false;
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -234,7 +236,10 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     }
   }
 
-  await replaceHeadScripts(nativeDocument);
+  if (response.newDocument || !headScriptsLoaded) {
+    await replaceHeadScripts(nativeDocument);
+    headScriptsLoaded = true;
+  }
   for (const element of updatedElements) {
     for (const source of element.querySelectorAll("script")) {
       source.replaceWith(liveScript(source));
