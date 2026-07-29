@@ -25,7 +25,7 @@ Change `r.notebook.sessionStartup` when a different startup time is preferred:
 
 - `background` starts the session while the active notebook is being prepared.
 - `onExecution` starts the session when the first code cell runs.
-- `manual` shows a **Start R Session** button and never starts the session implicitly.
+- `manual` shows **Start R Session** until the session starts, then shows **Restart R Session**. It never starts the session implicitly.
 
 ## Features
  - Render markdown cells as you go. 

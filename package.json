@@ -211,7 +211,7 @@
         },
         {
           "command": "r-notebook.startSession",
-          "when": "r.notebook.activeEditor && config.r.notebook.sessionStartup == manual"
+          "when": "r.notebook.activeEditor && config.r.notebook.sessionStartup == manual && !r.notebook.sessionRunning"
         },
         {
           "command": "r-notebook.restartSession",
@@ -258,12 +258,12 @@
       "notebook/toolbar": [
         {
           "command": "r-notebook.restartSession",
-          "when": "notebookType == r-notebook",
+          "when": "notebookType == r-notebook && (config.r.notebook.sessionStartup != manual || r.notebook.sessionRunning)",
           "group": "navigation/execute@5"
         },
         {
           "command": "r-notebook.startSession",
-          "when": "notebookType == r-notebook && config.r.notebook.sessionStartup == manual",
+          "when": "notebookType == r-notebook && config.r.notebook.sessionStartup == manual && !r.notebook.sessionRunning",
           "group": "navigation/execute@4"
         },
         {

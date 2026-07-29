@@ -90,6 +90,8 @@ export class RNotebookController implements vscode.Disposable {
   readonly onDidChangeNotebookState = this.notebookStateChanged.event;
   private readonly sessionShutdown = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidShutdownSession = this.sessionShutdown.event;
+  private readonly sessionStateChanged = new vscode.EventEmitter<vscode.Uri>();
+  readonly onDidChangeSessionState = this.sessionStateChanged.event;
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
   private executionOrder = 0;
@@ -115,7 +117,11 @@ export class RNotebookController implements vscode.Disposable {
     const key = notebook.uri.toString();
     let session = this.sessions.get(key);
     if (!session) {
-      const process = createInlineRProcess(notebook.uri, this.output);
+      const process = createInlineRProcess(notebook.uri, this.output, () => {
+        if (this.sessions.get(key)?.process === process) {
+          this.sessionStateChanged.fire(notebook.uri);
+        }
+      });
       session = {
         uri: notebook.uri,
         process,
@@ -249,6 +255,10 @@ export class RNotebookController implements vscode.Disposable {
 
   hasSession(notebookUri: vscode.Uri): boolean {
     return this.sessions.has(notebookUri.toString());
+  }
+
+  hasRunningSession(notebookUri: vscode.Uri): boolean {
+    return this.sessions.get(notebookUri.toString())?.process.processId !== undefined;
   }
 
   prefer(notebook: vscode.NotebookDocument): void {
@@ -618,6 +628,7 @@ export class RNotebookController implements vscode.Disposable {
     }
     this.attachment.forget(session.process);
     session.process.dispose();
+    this.sessionStateChanged.fire(notebookUri);
     this.sessionShutdown.fire(notebookUri);
   }
 
@@ -762,6 +773,7 @@ export class RNotebookController implements vscode.Disposable {
     this.markdownStateChanged.dispose();
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
+    this.sessionStateChanged.dispose();
     this.controller.dispose();
   }
 }

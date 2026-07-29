@@ -20,6 +20,7 @@ process.stdin.on("data", (chunk) => {
     const separator = line.indexOf(" ");
     const command = separator < 0 ? line : line.slice(0, separator);
     const argument = separator < 0 ? "" : line.slice(separator + 1);
+    if (command === "init") process.stdout.write("READY " + process.pid + "\n");
     if (command === "set") state = argument;
     if (command === "write") fs.writeFileSync(argument, state);
     if (command === "exit") process.exit(9);
@@ -87,4 +88,36 @@ test("keeps state in one hidden process and isolates different processes", async
   const failure = await second.send("exit");
   await assert.rejects(failure.failure, /exited with code 9/);
   failure.dispose();
+});
+
+test("reports when an initialised R process starts and stops", async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-status-test-"));
+  const runningStates: boolean[] = [];
+  const hiddenProcess = new HiddenRProcess(
+    async () => ({
+      executable: process.execPath,
+      args: ["-e", FAKE_R_PROCESS],
+      cwd: directory,
+      env: { ...process.env },
+      initialization: {
+        command: "init",
+        successMarker: "READY ",
+        failureMarker: "FAILED ",
+      },
+    }),
+    () => undefined,
+    (running) => runningStates.push(running)
+  );
+  t.after(() => {
+    hiddenProcess.dispose();
+    return fsPromises.rm(directory, { recursive: true, force: true });
+  });
+
+  await hiddenProcess.reattach();
+  assert.deepEqual(runningStates, [true]);
+
+  const failure = await hiddenProcess.send("exit");
+  await assert.rejects(failure.failure, /exited with code 9/);
+  failure.dispose();
+  assert.deepEqual(runningStates, [true, false]);
 });

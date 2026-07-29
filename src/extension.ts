@@ -235,6 +235,16 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const cellStatusBar = new RMarkdownCellStatusBarProvider();
   const consoleTransport = new RConsoleTransport();
+  const updateSessionContext = (
+    notebook = vscode.window.activeNotebookEditor?.notebook
+  ): Thenable<unknown> => vscode.commands.executeCommand(
+    "setContext",
+    "r.notebook.sessionRunning",
+    Boolean(
+      notebook?.notebookType === NOTEBOOK_TYPE &&
+      controller.hasRunningSession(notebook.uri)
+    )
+  );
   const refreshQuartoCompletions = (): void => {
     markdownCompletions.invalidateQuartoFormats();
     vscode.workspace.notebookDocuments.forEach((notebook) =>
@@ -262,6 +272,12 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     controller,
     controller.onDidChangeNotebookState(saveNotebookState),
+    controller.onDidChangeSessionState((uri) => {
+      const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
+      if (activeNotebook?.uri.toString() === uri.toString()) {
+        void updateSessionContext(activeNotebook);
+      }
+    }),
     controller.onDidShutdownSession((uri) => {
       const key = uri.toString();
       if (!hasOpenSourceEditor(key)) {
@@ -485,6 +501,7 @@ export function activate(context: vscode.ExtensionContext): void {
         "r.notebook.activeEditor",
         editor?.notebook.notebookType === NOTEBOOK_TYPE
       );
+      void updateSessionContext(editor?.notebook);
       if (
         editor &&
         textEditorDocuments.delete(editor.notebook.uri.toString())
@@ -689,6 +706,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "r.notebook.activeEditor",
     vscode.window.activeNotebookEditor?.notebook.notebookType === NOTEBOOK_TYPE
   );
+  void updateSessionContext();
   void controller.selectNotebook(vscode.window.activeNotebookEditor?.notebook).catch(
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
