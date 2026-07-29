@@ -8,6 +8,82 @@ export interface CellOptionCompletions {
   quarto: OptionCompletion[];
 }
 
+interface KnitrDocumentedOptionValues {
+  header: readonly string[];
+  pipe: readonly string[];
+}
+
+const KNITR_DOCUMENTED_OPTION_VALUES: Readonly<
+  Record<string, KnitrDocumentedOptionValues>
+> = {
+  results: {
+    header: ["'markup'", "'asis'", "'hold'", "'hide'", "FALSE"],
+    pipe: ["markup", "asis", "hold", "hide", "false"],
+  },
+  tidy: {
+    header: ["FALSE", "TRUE", "'formatR'", "'styler'"],
+    pipe: ["false", "true", "formatR", "styler"],
+  },
+  warning: {
+    header: ["TRUE", "FALSE", "NA"],
+    pipe: ["true", "false"],
+  },
+  message: {
+    header: ["TRUE", "FALSE", "NA"],
+    pipe: ["true", "false"],
+  },
+  error: {
+    header: ["FALSE", "TRUE", "0", "1", "2"],
+    pipe: ["false", "true", "0", "1", "2"],
+  },
+  "fig.keep": {
+    header: ["'high'", "'none'", "'all'", "'first'", "'last'"],
+    pipe: ["high", "none", "all", "first", "last"],
+  },
+  "fig.show": {
+    header: ["'asis'", "'hold'", "'animate'", "'hide'"],
+    pipe: ["asis", "hold", "animate", "hide"],
+  },
+  "fig.align": {
+    header: ["'default'", "'left'", "'right'", "'center'"],
+    pipe: ["default", "left", "right", "center"],
+  },
+};
+
+export function knitrOptionCompletions(output: string): CellOptionCompletions {
+  const headerOptions = new Map<string, OptionCompletion>();
+  for (const line of output.split(/\r?\n/)) {
+    const [kind, name, type] = line.split("\t", 3);
+    if (kind !== "option" || !name) {
+      continue;
+    }
+    const documented = KNITR_DOCUMENTED_OPTION_VALUES[name];
+    headerOptions.set(name, documented
+      ? { name, values: [...documented.header] }
+      : type === "logical"
+        ? { name, values: ["TRUE", "FALSE"] }
+        : { name });
+  }
+  const rMarkdown = [...headerOptions.values()]
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const quarto = rMarkdown.map((completion) => {
+    const documented = KNITR_DOCUMENTED_OPTION_VALUES[completion.name];
+    return {
+      name: completion.name.replace(/\./g, "-"),
+      ...(documented
+        ? { values: [...documented.pipe] }
+        : completion.values
+          ? {
+            values: completion.values.map((value) =>
+              value === "TRUE" ? "true" : value === "FALSE" ? "false" : value
+            ),
+          }
+          : {}),
+    };
+  });
+  return { rMarkdown, quarto };
+}
+
 interface SchemaNode {
   type?: unknown;
   $ref?: unknown;

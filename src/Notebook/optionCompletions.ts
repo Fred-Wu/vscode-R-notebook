@@ -7,6 +7,7 @@ import {
   resolveRExecutable,
 } from "../Runtime/launch";
 import {
+  knitrOptionCompletions,
   quartoOptionCompletions,
   type CellOptionCompletions,
   type OptionCompletion,
@@ -34,21 +35,6 @@ function execute(command: string, args: string[]): Promise<string> {
       }
     });
   });
-}
-
-function rMarkdownCompletions(output: string): OptionCompletion[] {
-  const completions = new Map<string, OptionCompletion>();
-  for (const line of output.split(/\r?\n/)) {
-    const [kind, name, type] = line.split("\t", 3);
-    if (kind !== "option" || !name) {
-      continue;
-    }
-    completions.set(name, type === "logical"
-      ? { name, values: ["TRUE", "FALSE"] }
-      : { name });
-  }
-  return [...completions.values()]
-    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function configuredQuartoExecutable(notebookUri: vscode.Uri): string {
@@ -79,7 +65,7 @@ async function loadQuartoCompletions(quarto: string): Promise<OptionCompletion[]
 }
 
 export class CellOptionCompletionProvider {
-  private readonly rMarkdownCache = new Map<string, Promise<OptionCompletion[]>>();
+  private readonly rMarkdownCache = new Map<string, Promise<CellOptionCompletions>>();
   private readonly quartoCache = new Map<string, Promise<OptionCompletion[]>>();
 
   constructor(private readonly output: vscode.OutputChannel) {}
@@ -88,21 +74,15 @@ export class CellOptionCompletionProvider {
     notebookUri: vscode.Uri,
     documentKind: "quarto" | "rMarkdown"
   ): Promise<CellOptionCompletions> {
-    const quarto = configuredQuartoExecutable(notebookUri);
     if (documentKind === "quarto") {
+      const quarto = configuredQuartoExecutable(notebookUri);
       return this.loadQuarto(quarto).then((quartoOptions) => ({
         rMarkdown: [],
         quarto: quartoOptions,
       }));
     }
     const r = resolveRExecutable(notebookUri);
-    return Promise.all([
-      this.loadRMarkdown(r),
-      this.loadQuarto(quarto),
-    ]).then(([rMarkdown, quartoOptions]) => ({
-      rMarkdown,
-      quarto: quartoOptions,
-    }));
+    return this.loadRMarkdown(r);
   }
 
   clear(): void {
@@ -110,15 +90,15 @@ export class CellOptionCompletionProvider {
     this.quartoCache.clear();
   }
 
-  private loadRMarkdown(rExecutable: string): Promise<OptionCompletion[]> {
+  private loadRMarkdown(rExecutable: string): Promise<CellOptionCompletions> {
     let result = this.rMarkdownCache.get(rExecutable);
     if (!result) {
       result = execute(
         rExecutable,
         ["--vanilla", "--slave", "-e", R_MARKDOWN_OPTIONS_EXPRESSION]
-      ).then(rMarkdownCompletions).catch((error: unknown) => {
+      ).then(knitrOptionCompletions).catch((error: unknown) => {
         this.log("R Markdown", error);
-        return [];
+        return { rMarkdown: [], quarto: [] };
       });
       this.rMarkdownCache.set(rExecutable, result);
     }

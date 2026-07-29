@@ -10,6 +10,8 @@ All notable changes to R Notebook for VS Code will be documented in this file.
 - Added suggestions while typing in Quarto YAML headers without interrupting Markdown writing.
 - Kept R Markdown cell-option suggestions out of Quarto notebooks.
 - Fixed R Markdown figure reference links so they jump to the matching plot output.
+- Fixed R Markdown cell execution so it uses R Markdown directly and does not require Quarto.
+- Kept R Markdown cell-option suggestions available without Quarto.
 - Fixed Shutdown and Close so it closes every open tab for the notebook.
 
 ## [0.1.0] - 2026-07-23

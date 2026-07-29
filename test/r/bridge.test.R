@@ -49,7 +49,8 @@ run_chunk <- function(
   document,
   source,
   cell_id = name,
-  document_context = document
+  document_context = document,
+  quarto_executable = ""
 ) {
   output_dir <- file.path(test_root, name)
   dir.create(output_dir)
@@ -69,7 +70,8 @@ run_chunk <- function(
     cell_key = gsub("[^A-Za-z0-9_-]", "-", cell_id),
     output_dir = output_dir,
     working_dir = test_root,
-    evaluation_env = .GlobalEnv
+    evaluation_env = .GlobalEnv,
+    quarto_executable = quarto_executable
   )
   output_dir
 }
@@ -98,6 +100,119 @@ png_dimensions <- function(path) {
   seek(connection, where = 16L, origin = "start")
   readBin(connection, integer(), n = 2L, size = 4L, endian = "big")
 }
+
+image_display_width <- function(html) {
+  image <- regmatches(html, regexpr("<img[^>]*>", html, perl = TRUE))
+  width <- regmatches(
+    image,
+    regexpr("width=\"[0-9.]+\"", image, perl = TRUE)
+  )
+  sub('^width="|"$', "", width)
+}
+
+rmd_without_quarto_dir <- run_chunk(
+  "rmd-without-quarto",
+  rmd_document,
+  c(
+    "```{r}",
+    "#| label: fig-rmd-target",
+    "#| fig-cap: Native R Markdown plot",
+    "#| echo: false",
+    "#| fig-width: 3",
+    "#| fig-height: 2",
+    "#| fig-dpi: 100",
+    "#| fig-retina: 1",
+    "cat('native R Markdown output\\n')",
+    "plot(1:3)",
+    "```"
+  ),
+  quarto_executable = file.path(test_root, "missing-quarto")
+)
+stopifnot(readLines(
+  file.path(rmd_without_quarto_dir, "done"),
+  warn = FALSE
+) == "true")
+rmd_without_quarto_html <- output_payload(rmd_without_quarto_dir)
+stopifnot(grepl(
+  "native R Markdown output",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(!grepl(
+  "## native R Markdown output",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "data:image/png;base64",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  'id="fig-rmd-target"',
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "<style>pre code{background-color:transparent}</style>",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(!grepl(
+  "quarto-layout",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+stopifnot(!grepl("bs3=TRUE", rmd_without_quarto_html, fixed = TRUE))
+stopifnot(!grepl(
+  "padding-top: 60px",
+  rmd_without_quarto_html,
+  fixed = TRUE
+))
+rmd_without_quarto_pngs <- cell_execution_files(
+  "rmd-without-quarto",
+  "\\.png$"
+)
+stopifnot(length(rmd_without_quarto_pngs) == 1L)
+stopifnot(identical(
+  png_dimensions(rmd_without_quarto_pngs[[1L]]),
+  c(300L, 200L)
+))
+
+rmd_explicit_comment_dir <- run_chunk(
+  "rmd-explicit-comment",
+  rmd_document,
+  c(
+    "```{r, echo=FALSE, comment='CUSTOM: '}",
+    "cat('explicit R Markdown comment\\n')",
+    "```"
+  ),
+  quarto_executable = file.path(test_root, "missing-quarto")
+)
+rmd_explicit_comment_html <- output_payload(rmd_explicit_comment_dir)
+stopifnot(grepl(
+  "CUSTOM:[[:space:]]+explicit R Markdown comment",
+  rmd_explicit_comment_html,
+  perl = TRUE
+))
+
+rmd_default_plot_dir <- run_chunk(
+  "rmd-default-plot",
+  rmd_document,
+  c(
+    "```{r}",
+    "#| echo: false",
+    "plot(1:10)",
+    "```"
+  ),
+  quarto_executable = file.path(test_root, "missing-quarto")
+)
+rmd_default_plot_html <- output_payload(rmd_default_plot_dir)
+rmd_default_plot_pngs <- cell_execution_files(
+  "rmd-default-plot",
+  "\\.png$"
+)
+stopifnot(length(rmd_default_plot_pngs) == 1L)
 
 knit_engines_before_execution <- knitr::knit_engines$get()
 inline_renderer_before_execution <- function(value) value
@@ -137,6 +252,60 @@ stopifnot(grepl(
   "width:var(--vsc-r-notebook-plot-width);max-width:100%;height:auto",
   basic_html,
   fixed = TRUE
+))
+
+qmd_default_plot_dir <- run_chunk(
+  "qmd-default-plot",
+  qmd_document,
+  c(
+    "```{r}",
+    "#| echo: false",
+    "plot(1:10)",
+    "```"
+  )
+)
+qmd_default_plot_html <- output_payload(qmd_default_plot_dir)
+qmd_default_plot_pngs <- cell_execution_files(
+  "qmd-default-plot",
+  "\\.png$"
+)
+stopifnot(length(qmd_default_plot_pngs) == 1L)
+stopifnot(identical(
+  png_dimensions(rmd_default_plot_pngs[[1L]]),
+  png_dimensions(qmd_default_plot_pngs[[1L]])
+))
+stopifnot(identical(
+  image_display_width(rmd_default_plot_html),
+  image_display_width(qmd_default_plot_html)
+))
+
+qmd_matched_plot_dir <- run_chunk(
+  "qmd-matched-plot",
+  qmd_document,
+  c(
+    "```{r}",
+    "#| echo: false",
+    "#| fig-width: 3",
+    "#| fig-height: 2",
+    "#| fig-dpi: 100",
+    "#| fig-retina: 1",
+    "plot(1:3)",
+    "```"
+  )
+)
+qmd_matched_plot_html <- output_payload(qmd_matched_plot_dir)
+qmd_matched_plot_pngs <- cell_execution_files(
+  "qmd-matched-plot",
+  "\\.png$"
+)
+stopifnot(length(qmd_matched_plot_pngs) == 1L)
+stopifnot(identical(
+  png_dimensions(rmd_without_quarto_pngs[[1L]]),
+  png_dimensions(qmd_matched_plot_pngs[[1L]])
+))
+stopifnot(identical(
+  image_display_width(rmd_without_quarto_html),
+  image_display_width(qmd_matched_plot_html)
 ))
 
 leading_options_dir <- run_chunk("leading-options", qmd_document, c(
@@ -298,15 +467,13 @@ rmd_layout_dir <- run_chunk("rmd-layout", rmd_document, c(
   "```"
 ))
 rmd_layout_html <- output_payload(rmd_layout_dir)
-stopifnot(grepl("quarto-layout-row", rmd_layout_html, fixed = TRUE))
-stopifnot(grepl("quarto-figure-spacer", rmd_layout_html, fixed = TRUE))
-stopifnot(grepl(
-  "style=\"flex-basis: 100.0%;justify-content: center;\"",
-  rmd_layout_html,
-  fixed = TRUE
-))
 stopifnot(!grepl("container-fluid main-container", rmd_layout_html, fixed = TRUE))
 stopifnot(!grepl("bs3=TRUE", rmd_layout_html, fixed = TRUE))
+stopifnot(length(gregexpr(
+  "data:image/png;base64",
+  rmd_layout_html,
+  fixed = TRUE
+)[[1L]]) == 3L)
 rmd_layout_pngs <- cell_execution_files("rmd-layout", "\\.png$")
 stopifnot(length(rmd_layout_pngs) == 3L)
 stopifnot(all(vapply(rmd_layout_pngs, function(path) {
@@ -613,22 +780,21 @@ repeat_reference <- run_chunk("repeat-reference", repeat_document, c(
 stopifnot(readLines(file.path(repeat_reference, "done"), warn = FALSE) == "true")
 stopifnot(identical(repeated_source_value, 2L))
 
-paged_document <- file.path(test_root, "paged.Rmd")
+word_document <- file.path(test_root, "word-output.Rmd")
 writeLines(c(
   "---",
-  "output:",
-  "  html_document:",
-  "    df_print: paged",
+  "output: word_document",
   "---",
   ""
-), paged_document)
-paged_dir <- run_chunk("paged", paged_document, c(
+), word_document)
+word_output_dir <- run_chunk("word-output", word_document, c(
   "```{r, echo=FALSE}",
   "data.frame(native_column = 1:3)",
   "```"
 ))
-paged_html <- output_payload(paged_dir)
-stopifnot(grepl("pagedtable", paged_html, ignore.case = TRUE))
+word_output_html <- output_payload(word_output_dir)
+stopifnot(grepl("native_column", word_output_html, fixed = TRUE))
+stopifnot(length(cell_execution_files("word-output", "\\.docx$")) == 0L)
 
 filter_path <- file.path(test_root, "native-filter.lua")
 writeLines(c(
@@ -703,8 +869,8 @@ rmd_filter_dir <- run_chunk("rmd-filter", rmd_filter_document, c(
   "```"
 ))
 rmd_filter_html <- output_payload(rmd_filter_dir)
-stopifnot(grepl("after-native-filter", rmd_filter_html, fixed = TRUE))
-stopifnot(!grepl("before-native-filter", rmd_filter_html, fixed = TRUE))
+stopifnot(grepl("before-native-filter", rmd_filter_html, fixed = TRUE))
+stopifnot(!grepl("after-native-filter", rmd_filter_html, fixed = TRUE))
 stopifnot(grepl("data:image/png;base64", rmd_filter_html, fixed = TRUE))
 
 qmd_asis_dir <- run_chunk("qmd-asis", params_document, c(

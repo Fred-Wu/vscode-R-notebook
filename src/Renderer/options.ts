@@ -272,8 +272,10 @@ function render(
   );
   const quarto = formField(
     document,
-    "Quarto options",
-    "One option per line, without the #| prefix.",
+    data.documentKind === "quarto" ? "Quarto options" : "Pipe options (#|)",
+    data.documentKind === "quarto"
+      ? "One option per line, without the #| prefix."
+      : "Native knitr options, one per line without the #| prefix.",
     data.quartoOptions,
     "echo: false\nwarning: false",
     true

@@ -228,7 +228,7 @@ r_notebook_quarto_executable <- function(configured) {
   quarto <- if (base::nzchar(configured)) configured else base::Sys.which("quarto")
   if (!base::nzchar(quarto)) {
     base::stop(base::paste(
-      "Quarto is required for R notebooks.",
+      "Quarto is required for Quarto notebooks.",
       "Set r.notebook.quartoPath or add Quarto to the R session's PATH."
     ))
   }
@@ -422,48 +422,73 @@ r_notebook_without_front_matter <- function(markdown, context_marker) {
   markdown
 }
 
-r_notebook_rmarkdown_dependencies <- function(knit_meta, format, execution_dir) {
-  extras <- rmarkdown:::html_extras_for_document(
-    knit_meta,
-    "static",
-    rmarkdown:::html_dependency_resolver,
-    format$dependencies
-  )
-  if (base::length(extras$dependencies) == 0L) {
-    return(list())
+r_notebook_rmarkdown_html_format <- function(document_path) {
+  if (
+    !base::requireNamespace("rmarkdown", quietly = TRUE) ||
+      !rmarkdown::pandoc_available(error = FALSE)
+  ) {
+    base::stop("The R package 'rmarkdown' and Pandoc are required to render R Markdown.")
   }
 
-  library_dir <- base::file.path(execution_dir, "dependencies")
-  dependency_html <- rmarkdown:::html_dependencies_as_string(
-    extras$dependencies,
-    library_dir,
-    execution_dir
-  )
-  include_path <- base::file.path(execution_dir, "dependencies.html")
-  base::writeLines(base::as.character(dependency_html), include_path, useBytes = TRUE)
-  list("include-in-header" = include_path)
-}
+  configured_output <- rmarkdown::default_output_format(document_path)$name
+  uses_bookdown <- base::grepl("^bookdown::", configured_output)
+  if (
+    uses_bookdown &&
+      !base::requireNamespace("bookdown", quietly = TRUE)
+  ) {
+    base::stop("The R package 'bookdown' is required by this R Markdown output format.")
+  }
 
-r_notebook_rmarkdown_filters <- function(format) {
-  # Quarto supplies its own internal presentation filters. R Markdown's
-  # internal filters require its Pandoc runtime, so forward only user filters.
-  filters <- base::character()
-  arguments <- base::as.character(format$pandoc$args)
-  next_is_filter <- FALSE
-  for (argument in arguments) {
-    if (next_is_filter) {
-      filters <- c(filters, argument)
-      next_is_filter <- FALSE
-    } else if (argument %in% c("--filter", "--lua-filter")) {
-      next_is_filter <- TRUE
-    } else if (base::grepl("^--(lua-)?filter=", argument)) {
-      filters <- c(filters, base::sub("^--(lua-)?filter=", "", argument))
+  format <- if (uses_bookdown) {
+    bookdown::html_document2(
+      self_contained = TRUE,
+      theme = NULL,
+      highlight = NULL
+    )
+  } else {
+    rmarkdown::html_document(
+      self_contained = TRUE,
+      theme = NULL,
+      highlight = NULL
+    )
+  }
+
+  format$knitr$opts_chunk$comment <- ""
+  native_pre_processor <- format$pre_processor
+  format$pre_processor <- function(...) {
+    c(
+      if (base::is.function(native_pre_processor)) {
+        native_pre_processor(...)
+      } else {
+        base::character()
+      },
+      "--mathml"
+    )
+  }
+  format$knitr$opts_chunk$fig.id <- function(options) {
+    label <- options[["label"]]
+    figure_index <- options[["fig.cur"]]
+    if (
+      !base::is.character(label) ||
+        base::length(label) != 1L ||
+        !base::grepl("^[A-Za-z][A-Za-z0-9_.:-]*$", label) ||
+        (
+          !base::is.null(figure_index) &&
+            !base::identical(base::as.integer(figure_index), 1L)
+        )
+    ) {
+      return("")
     }
+    base::paste0('id="', label, '"')
   }
-  base::unique(filters[base::nzchar(filters)])
+  format
 }
 
-r_notebook_prepare_html <- function(html) {
+r_notebook_prepare_html <- function(
+  html,
+  quarto_output,
+  rmarkdown_cell_output = FALSE
+) {
   pattern <- "<link[[:space:]][^>]*href=\"data:text/css,([^\"]*)\"[^>]*>"
   locations <- base::gregexpr(pattern, html, perl = TRUE)
   links <- base::regmatches(html, locations)[[1L]]
@@ -501,17 +526,23 @@ r_notebook_prepare_html <- function(html) {
     base::regmatches(html, locations) <- list(styles)
   }
 
-  layout_style <- base::paste0(
-    "<style>",
-    ".cell-output-stdout pre code,.cell-output-stderr pre code{",
-    "background-color:transparent}",
-    ".cell-output-display[style*=\"--vsc-r-notebook-plot-width\"] img{",
-    "width:var(--vsc-r-notebook-plot-width);max-width:100%;height:auto}",
-    ".cell[style*=\"--vsc-r-notebook-plot-width\"] .quarto-layout-row{",
-    "width:var(--vsc-r-notebook-plot-width);max-width:100%}",
-    ".quarto-layout-cell img{width:100%;height:auto}",
-    "</style>"
-  )
+  output_style <- if (base::isTRUE(quarto_output)) {
+    base::paste0(
+      "<style>",
+      ".cell-output-stdout pre code,.cell-output-stderr pre code{",
+      "background-color:transparent}",
+      ".cell-output-display[style*=\"--vsc-r-notebook-plot-width\"] img{",
+      "width:var(--vsc-r-notebook-plot-width);max-width:100%;height:auto}",
+      ".cell[style*=\"--vsc-r-notebook-plot-width\"] .quarto-layout-row{",
+      "width:var(--vsc-r-notebook-plot-width);max-width:100%}",
+      ".quarto-layout-cell img{width:100%;height:auto}",
+      "</style>"
+    )
+  } else if (base::isTRUE(rmarkdown_cell_output)) {
+    "<style>pre code{background-color:transparent}</style>"
+  } else {
+    ""
+  }
   dt_theme_style <- ""
   if (base::grepl("div.datatables", html, fixed = TRUE)) {
     dt_theme_style <- base::paste0(
@@ -538,12 +569,12 @@ r_notebook_prepare_html <- function(html) {
   if (base::grepl("</head>", html, fixed = TRUE)) {
     html <- base::sub(
       "</head>",
-      base::paste0(layout_style, dt_theme_style, "</head>"),
+      base::paste0(output_style, dt_theme_style, "</head>"),
       html,
       fixed = TRUE
     )
   } else {
-    html <- base::paste0(layout_style, dt_theme_style, html)
+    html <- base::paste0(output_style, dt_theme_style, html)
   }
   if (
     base::nzchar(widget_bootstrap) &&
@@ -688,6 +719,29 @@ r_notebook_render_html <- function(
   ), collapse = "\n")
 }
 
+r_notebook_render_rmarkdown_html <- function(
+  result,
+  execution_dir,
+  document_path
+) {
+  markdown_path <- base::file.path(execution_dir, "notebook-output.md")
+  base::writeLines(result$markdown, markdown_path, useBytes = TRUE)
+  rendered_path <- rmarkdown::render(
+    input = markdown_path,
+    output_format = r_notebook_rmarkdown_html_format(document_path),
+    output_file = "notebook-output.html",
+    output_dir = execution_dir,
+    knit_meta = result$knit_meta,
+    clean = TRUE,
+    quiet = TRUE
+  )
+  base::paste(base::readLines(
+    rendered_path,
+    warn = FALSE,
+    encoding = "UTF-8"
+  ), collapse = "\n")
+}
+
 r_notebook_inline_markdown <- function(markup, evaluation_env) {
   parsed <- utils::getFromNamespace("parse_inline", "knitr")(
     markup,
@@ -798,60 +852,9 @@ r_notebook_render_text <- function(
       }
       html <- base::paste(render_output, collapse = "\n")
     } else {
-      if (
-        !base::requireNamespace("rmarkdown", quietly = TRUE) ||
-          !rmarkdown::pandoc_available(error = FALSE)
-      ) {
-        base::stop("The R package 'rmarkdown' and Pandoc are required to render R Markdown text.")
-      }
-      configured_output <- rmarkdown::default_output_format(native_document_path)$name
-      uses_bookdown <- base::grepl("^bookdown::", configured_output)
-      if (
-        uses_bookdown &&
-          !base::requireNamespace("bookdown", quietly = TRUE)
-      ) {
-        base::stop("The R package 'bookdown' is required by this R Markdown output format.")
-      }
-      native_format <- rmarkdown::resolve_output_format(native_document_path)
-      if (
-        !base::is.character(native_format$pandoc$to) ||
-          base::length(native_format$pandoc$to) != 1L ||
-          !base::grepl("^html", native_format$pandoc$to)
-      ) {
-        native_format <- if (uses_bookdown) {
-          bookdown::html_document2(
-            self_contained = TRUE,
-            theme = NULL,
-            highlight = NULL
-          )
-        } else {
-          rmarkdown::html_document(
-            self_contained = TRUE,
-            theme = NULL,
-            highlight = NULL
-          )
-        }
-      }
-      if (!"--self-contained" %in% native_format$pandoc$args) {
-        native_format$pandoc$args <- c(
-          native_format$pandoc$args,
-          "--self-contained"
-        )
-      }
-      native_pre_processor <- native_format$pre_processor
-      native_format$pre_processor <- function(...) {
-        c(
-          if (base::is.function(native_pre_processor)) {
-            native_pre_processor(...)
-          } else {
-            base::character()
-          },
-          "--mathml"
-        )
-      }
       rendered_path <- rmarkdown::render(
         input = native_document_path,
-        output_format = native_format,
+        output_format = r_notebook_rmarkdown_html_format(native_document_path),
         output_file = "result.html",
         output_dir = output_dir,
         intermediates_dir = output_dir,
@@ -872,7 +875,10 @@ r_notebook_render_text <- function(
         perl = TRUE
       )
     }
-    html <- r_notebook_prepare_html(html)
+    html <- r_notebook_prepare_html(
+      html,
+      quarto_output = base::identical(extension, "qmd")
+    )
     base::writeLines(
       html,
       base::file.path(output_dir, "result.html"),
@@ -982,9 +988,12 @@ r_notebook_execute <- function(
       warn = FALSE,
       encoding = "UTF-8"
     ))
-    execution_lines <- c(front_matter, if (base::length(front_matter)) "" else NULL, chunk_lines)
+    execution_lines <- c(
+      front_matter,
+      if (base::length(front_matter)) "" else NULL,
+      chunk_lines
+    )
     base::writeLines(execution_lines, execution_path, useBytes = TRUE)
-    execution_source <- base::paste(execution_lines, collapse = "\n")
 
     generated_labels <- base::new.env(parent = base::emptyenv())
     generated_labels$values <- base::character()
@@ -1014,36 +1023,32 @@ r_notebook_execute <- function(
       capture$previous_hooks,
       action = "replace"
     ), add = TRUE)
-    presentation_resource_dirs <- c(
-      base::dirname(native_document_path),
-      working_dir
-    )
-    quarto <- r_notebook_quarto_context(
-      runtime,
-      native_document_path,
-      output_dir,
-      quarto_executable
-    )
-    presentation_resource_dirs <- base::unique(c(
-      presentation_resource_dirs,
-      quarto$project_dir
-    ))
-    native_presentation_filters <- base::as.character(
-      quarto$format$pandoc$filters
-    )
-    if (base::requireNamespace("htmlwidgets", quietly = TRUE)) {
-      original_widget_sizing <- utils::getFromNamespace(
-        "resolveSizing",
-        "htmlwidgets"
-      )
-      base::on.exit(utils::assignInNamespace(
-        "resolveSizing",
-        original_widget_sizing,
-        ns = "htmlwidgets"
-      ), add = TRUE)
-    }
-
     if (base::identical(extension, "qmd")) {
+      quarto <- r_notebook_quarto_context(
+        runtime,
+        native_document_path,
+        output_dir,
+        quarto_executable
+      )
+      presentation_resource_dirs <- base::unique(c(
+        base::dirname(native_document_path),
+        working_dir,
+        quarto$project_dir
+      ))
+      if (base::requireNamespace("htmlwidgets", quietly = TRUE)) {
+        original_widget_sizing <- utils::getFromNamespace(
+          "resolveSizing",
+          "htmlwidgets"
+        )
+        base::on.exit(utils::assignInNamespace(
+          "resolveSizing",
+          original_widget_sizing,
+          ns = "htmlwidgets"
+        ), add = TRUE)
+      }
+      native_presentation_filters <- base::as.character(
+        quarto$format$pandoc$filters
+      )
       had_inline_renderer <- base::exists(
         ".QuartoInlineRender",
         envir = base::.GlobalEnv,
@@ -1067,7 +1072,7 @@ r_notebook_execute <- function(
           params = NULL,
           resourceDir = runtime$quarto_resource_dir,
           handledLanguages = base::character(),
-          markdown = execution_source
+          markdown = base::paste(execution_lines, collapse = "\n")
         ),
         finally = {
           if (had_inline_renderer) {
@@ -1091,36 +1096,17 @@ r_notebook_execute <- function(
       )
       result$filters <- c(quarto$format$pandoc$filters, result$filters)
     } else {
-      native_format <- rmarkdown::resolve_output_format(native_document_path)
-      quarto_knitr <- quarto$environment$knitr_options(
-        quarto$format,
-        runtime$quarto_resource_dir,
-        base::character()
-      )
-      quarto_knitr <- quarto$environment$knitr_options_with_cache(
-        execution_path,
-        quarto$format,
-        quarto_knitr
-      )
-      native_knitr <- base::Filter(
-        base::Negate(base::is.null),
-        native_format$knitr
-      )
-      native_format$knitr <- rmarkdown:::merge_lists(
-        quarto_knitr,
-        native_knitr
-      )
-      quarto$environment$apply_responsive_patch(quarto$format)
       render_output <- rmarkdown::render(
         input = execution_path,
-        output_format = native_format,
+        output_format = r_notebook_rmarkdown_html_format(
+          native_document_path
+        ),
         knit_root_dir = working_dir,
         run_pandoc = FALSE,
         envir = evaluation_env,
         clean = FALSE,
         quiet = TRUE
       )
-      knit_meta <- base::attr(render_output, "knit_meta")
       markdown_path <- render_output
       if (!base::file.exists(markdown_path)) {
         markdown_path <- base::file.path(execution_dir, render_output)
@@ -1131,18 +1117,12 @@ r_notebook_execute <- function(
         encoding = "UTF-8"
       ), collapse = "\n")
       result <- list(
-        markdown = r_notebook_without_front_matter(markdown, context_marker),
-        includes = r_notebook_rmarkdown_dependencies(
-          knit_meta,
-          native_format,
-          execution_dir
+        markdown = r_notebook_without_front_matter(
+          markdown,
+          context_marker
         ),
-        filters = c(
-          quarto$format$pandoc$filters,
-          r_notebook_rmarkdown_filters(native_format)
-        )
+        knit_meta = base::attr(render_output, "knit_meta")
       )
-      native_presentation_filters <- base::as.character(result$filters)
     }
 
     if (!base::is.null(capture$capture$error)) {
@@ -1171,44 +1151,56 @@ r_notebook_execute <- function(
         !base::is.na(result$markdown) &&
         base::nzchar(base::trimws(result$markdown))
     ) {
-      plain_output <- base::grepl(
-        base::paste0(
-          "(?s)^[[:space:]]*::: \\{\\.cell\\}[[:space:]]*",
-          "(?:::: \\{\\.cell-output \\.cell-output-(?:stdout|stderr)\\}",
-          "[[:space:]]*```[^\\n]*\\n.*?\\n```[[:space:]]*:::[[:space:]]*)+",
-          ":::[[:space:]]*$"
-        ),
-        result$markdown,
-        perl = TRUE
-      )
-      presentation_command <- runtime$quarto
-      if (
-        plain_output &&
-          base::nzchar(runtime$quarto) &&
-          base::length(native_presentation_filters) == 0L &&
-          base::length(result$includes) == 0L &&
-          base::is.null(result$engineDependencies) &&
-          base::dir.exists(runtime$quarto_pandoc_dir)
-      ) {
-        if (!base::isTRUE(runtime$quarto_pandoc_configured)) {
-          rmarkdown::find_pandoc(
-            cache = FALSE,
-            dir = runtime$quarto_pandoc_dir
-          )
-          runtime$quarto_pandoc_configured <- TRUE
+      if (base::identical(extension, "qmd")) {
+        plain_output <- base::grepl(
+          base::paste0(
+            "(?s)^[[:space:]]*::: \\{\\.cell\\}[[:space:]]*",
+            "(?:::: \\{\\.cell-output \\.cell-output-(?:stdout|stderr)\\}",
+            "[[:space:]]*```[^\\n]*\\n.*?\\n```[[:space:]]*:::[[:space:]]*)+",
+            ":::[[:space:]]*$"
+          ),
+          result$markdown,
+          perl = TRUE
+        )
+        presentation_command <- runtime$quarto
+        if (
+          plain_output &&
+            base::nzchar(runtime$quarto) &&
+            base::length(native_presentation_filters) == 0L &&
+            base::length(result$includes) == 0L &&
+            base::is.null(result$engineDependencies) &&
+            base::dir.exists(runtime$quarto_pandoc_dir)
+        ) {
+          if (!base::isTRUE(runtime$quarto_pandoc_configured)) {
+            rmarkdown::find_pandoc(
+              cache = FALSE,
+              dir = runtime$quarto_pandoc_dir
+            )
+            runtime$quarto_pandoc_configured <- TRUE
+          }
+          presentation_command <- ""
         }
-        presentation_command <- ""
+        html <- r_notebook_render_html(
+          result,
+          execution_dir,
+          presentation_command,
+          runtime$quarto_resource_dir,
+          presentation_resource_dirs
+        )
+      } else {
+        html <- r_notebook_render_rmarkdown_html(
+          result,
+          execution_dir,
+          native_document_path
+        )
       }
-      html <- r_notebook_render_html(
-        result,
-        execution_dir,
-        presentation_command,
-        runtime$quarto_resource_dir,
-        presentation_resource_dirs
-      )
     }
     if (!base::is.null(html) && base::nzchar(base::trimws(html))) {
-      html <- r_notebook_prepare_html(html)
+      html <- r_notebook_prepare_html(
+        html,
+        quarto_output = base::identical(extension, "qmd"),
+        rmarkdown_cell_output = base::identical(extension, "rmd")
+      )
       emit_text(
         "display",
         "text/html",

@@ -362,6 +362,27 @@ test("the R bridge attaches once, persists state, and isolates processes", async
     firstProcess,
     () => path.join(directory, "missing-quarto")
   );
+  const nativeRMarkdownExecution = await rMarkdownOnlyBridge.execute(
+    rmdChunk([
+      "#| echo: false",
+      "cat('R Markdown executed without Quarto')",
+    ].join("\n")),
+    documentPath,
+    neverCancelled
+  );
+  assert.equal(nativeRMarkdownExecution.success, true);
+  assert.equal(nativeRMarkdownExecution.outputs[0]?.mime, "text/html");
+  assert.match(
+    outputText(nativeRMarkdownExecution),
+    /R Markdown executed without Quarto/
+  );
+  assert.equal(
+    (await fsPromises.readdir(directory)).some((entry) =>
+      entry.startsWith(".vsc-r-notebook-")
+    ),
+    false
+  );
+
   const nativeRMarkdownHtml = await rMarkdownOnlyBridge.renderText(
     [
       {
@@ -408,7 +429,11 @@ test("the R bridge attaches once, persists state, and isolates processes", async
   assert.match(nativeRMarkdownHtml, /value\s+<strong>42<\/strong>/);
   assert.match(nativeRMarkdownHtml, /Native R Markdown title/);
   assert.match(nativeRMarkdownHtml, /R Markdown author/);
-  assert.match(nativeRMarkdownHtml, /<div id="header">/);
+  assert.match(
+    nativeRMarkdownHtml,
+    /<h1 class="title toc-ignore">Native R Markdown title<\/h1>/
+  );
+  assert.doesNotMatch(nativeRMarkdownHtml, /<div id="header">/);
   assert.match(nativeRMarkdownHtml, /<math display="inline"/);
   assert.match(nativeRMarkdownHtml, /<math display="block"/);
   const rMarkdownCellStart = nativeRMarkdownHtml.indexOf(
