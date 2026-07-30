@@ -33,7 +33,6 @@ function readData(outputItem: OutputItem): CellOptionsData | undefined {
   return data &&
     typeof data.requestId === "string" &&
     (data.documentKind === "quarto" || data.documentKind === "rMarkdown") &&
-    (data.optionStyle === "quarto" || data.optionStyle === "rMarkdown") &&
     typeof data.label === "string" &&
     typeof data.headerOptions === "string" &&
     typeof data.quartoOptions === "string"
@@ -165,7 +164,7 @@ function attachAutocomplete(
   };
 
   const draw = (): void => {
-    if (input.disabled || document.activeElement !== input) {
+    if (document.activeElement !== input) {
       popup.hidden = true;
       return;
     }
@@ -234,13 +233,12 @@ function render(
     .r-options-input:focus, .r-options-textarea:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
     .r-options-textarea { min-height: 96px; resize: vertical; font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); }
     .r-options-hint { grid-column: 2; color: var(--vscode-descriptionForeground); font-size: 12px; }
-    .r-options-field.disabled { opacity: 0.5; }
     .r-options-suggestions { position: absolute; z-index: 20; top: calc(100% + 2px); left: 0; right: 0; max-height: 220px; overflow-y: auto; border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-widget-border)); border-radius: 3px; padding: 3px; background: var(--vscode-editorSuggestWidget-background, var(--vscode-editorWidget-background)); box-shadow: 0 3px 8px var(--vscode-widget-shadow); }
     .r-options-suggestions[hidden] { display: none; }
     .r-options-suggestion { display: block; width: 100%; border: 0; padding: 5px 8px; color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground)); background: transparent; font: inherit; font-family: var(--vscode-editor-font-family); text-align: left; cursor: pointer; }
     .r-options-suggestion:hover, .r-options-suggestion.selected { color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground)); background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground)); }
     .r-options-error { min-height: 18px; margin: 10px 0 0 177px; color: var(--vscode-errorForeground); font-size: 12px; }
-    .r-options-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .r-options-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 10px; }
     .r-options-button { border: 0; border-radius: 3px; padding: 7px 16px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); font: inherit; cursor: pointer; }
     .r-options-button:hover { background: var(--vscode-button-hoverBackground); }
     .r-options-button.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
@@ -259,7 +257,9 @@ function render(
   const label = formField(
     document,
     "Chunk label",
-    "Applied using the active R Markdown or Quarto option style.",
+    data.documentKind === "quarto"
+      ? "Stored as the Quarto cell label."
+      : "Moved automatically when options are merged.",
     data.label,
     "Optional"
   );
@@ -289,78 +289,65 @@ function render(
   cancel.type = "button";
   cancel.className = "r-options-button secondary";
   cancel.textContent = "Cancel";
+  const mergeToHeader = document.createElement("button");
+  mergeToHeader.type = "button";
+  mergeToHeader.className = "r-options-button secondary";
+  mergeToHeader.textContent = "Merge to header";
+  mergeToHeader.title = "Merge and de-duplicate both styles into the chunk header.";
+  const mergeToPipe = document.createElement("button");
+  mergeToPipe.type = "button";
+  mergeToPipe.className = "r-options-button secondary";
+  mergeToPipe.textContent = "Merge to pipe";
+  mergeToPipe.title = "Merge and de-duplicate both styles into pipe options.";
   const apply = document.createElement("button");
   apply.type = "submit";
   apply.className = "r-options-button";
   apply.textContent = "Apply";
+  if (data.documentKind === "rMarkdown") {
+    actions.append(mergeToHeader, mergeToPipe);
+  }
   actions.append(cancel, apply);
-  form.append(
-    close,
-    label.container,
-    options.container,
-    quarto.container,
-    error,
-    actions
-  );
+  form.append(close, label.container);
+  if (data.documentKind === "rMarkdown") {
+    form.append(options.container);
+  }
+  form.append(quarto.container, error, actions);
   element.replaceChildren(style, form);
 
-  attachAutocomplete(
-    document,
-    options.input,
-    data.rMarkdownCompletions,
-    "rMarkdown"
-  );
+  if (data.documentKind === "rMarkdown") {
+    attachAutocomplete(
+      document,
+      options.input,
+      data.rMarkdownCompletions,
+      "rMarkdown"
+    );
+  }
   attachAutocomplete(document, quarto.input, data.quartoCompletions, "quarto");
 
-  let activeStyle = data.documentKind === "quarto" ? "quarto" : data.optionStyle;
-  const updateOptionStyle = (): void => {
-    const rMarkdownUsed = options.input.value.trim().length > 0;
-    const quartoUsed = quarto.input.value.trim().length > 0;
-    const disableRMarkdown = data.documentKind === "quarto" ||
-      (activeStyle === "quarto" && quartoUsed);
-    const disableQuarto = data.documentKind !== "quarto" &&
-      activeStyle === "rMarkdown" && rMarkdownUsed;
-    options.input.disabled = disableRMarkdown;
-    quarto.input.disabled = disableQuarto;
-    options.container.classList.toggle("disabled", disableRMarkdown);
-    quarto.container.classList.toggle("disabled", disableQuarto);
-  };
-  options.input.addEventListener("input", () => {
-    activeStyle = "rMarkdown";
-    updateOptionStyle();
-  });
-  quarto.input.addEventListener("input", () => {
-    activeStyle = "quarto";
-    updateOptionStyle();
-  });
-  options.input.addEventListener("focus", () => {
-    if (data.documentKind === "rMarkdown" && !quarto.input.value.trim()) {
-      activeStyle = "rMarkdown";
-    }
-  });
-  quarto.input.addEventListener("focus", () => {
-    if (!options.input.value.trim()) {
-      activeStyle = "quarto";
-    }
-  });
-  updateOptionStyle();
   const closeForm = (): void => postMessage({
     type: "rNotebook.cancelCellOptions",
     requestId: data.requestId,
   });
-  close.addEventListener("click", closeForm);
-  cancel.addEventListener("click", closeForm);
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
+  const submit = (
+    action: "apply" | "mergeToHeader" | "mergeToPipe"
+  ): void => {
     error.textContent = "";
     postMessage({
       type: "rNotebook.applyCellOptions",
       requestId: data.requestId,
-      optionStyle: activeStyle,
+      action,
       label: label.input.value,
       headerOptions: options.input.value,
       quartoOptions: quarto.input.value,
     });
+  };
+  close.addEventListener("click", closeForm);
+  cancel.addEventListener("click", closeForm);
+  mergeToHeader.addEventListener("click", () => submit("mergeToHeader"));
+  mergeToPipe.addEventListener("click", () => submit("mergeToPipe"));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submit("apply");
   });
   errors.set(data.requestId, error);
   outputRequests.set(outputItem.id, data.requestId);

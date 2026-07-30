@@ -1,13 +1,27 @@
-import { load as loadYaml } from "js-yaml";
+import {
+  DEFAULT_SCHEMA,
+  load as loadYaml,
+  Type as YamlType,
+} from "js-yaml";
 import { sourceLines, type ChunkMetadata } from "./document";
 import type { OptionCompletion } from "./optionSchema";
 
 export const CELL_OPTIONS_MIME = "application/vnd.r-notebook.cell-options+json";
 
+const cellOptionYamlSchema = DEFAULT_SCHEMA.extend([
+  new YamlType("!expr", {
+    kind: "scalar",
+    construct: (value: string | null) => value ?? "",
+  }),
+  new YamlType("!r", {
+    kind: "scalar",
+    construct: (value: string | null) => value ?? "",
+  }),
+]);
+
 export interface CellOptionsFormData {
   requestId: string;
   documentKind: "quarto" | "rMarkdown";
-  optionStyle: "quarto" | "rMarkdown";
   label: string;
   headerOptions: string;
   quartoOptions: string;
@@ -167,9 +181,28 @@ export function codeCellLabel(
     : chunkHeaderFields(header, chunk.engine).label.trim();
 }
 
-export interface CodeCellRenderOptions {
+export function removeHeaderLabelShadowedByPipe(
+  source: string,
+  chunk: ChunkMetadata
+): ChunkMetadata | undefined {
+  if (!quartoOptionFields(source).label.trim()) {
+    return undefined;
+  }
+  const header = chunkHeader(chunk.openingFence);
+  if (header === undefined) {
+    return undefined;
+  }
+  const fields = chunkHeaderFields(header, chunk.engine);
+  return fields.label
+    ? updateChunkHeaderFields(chunk, "", fields.options)
+    : undefined;
+}
+
+interface CodeCellRenderOptions {
   label: string;
-  attributes: ReadonlyMap<string, string>;
+  pipeOptions: ReadonlyMap<string, string>;
+  figureCaption?: string;
+  tableCaption?: string;
 }
 
 function optionValue(value: unknown): string {
@@ -218,10 +251,12 @@ function rMarkdownOptionFields(options: string): string[] {
 
 export function codeCellRenderOptions(
   source: string,
-  chunk: ChunkMetadata | undefined
+  chunk: ChunkMetadata | undefined,
+  documentKind: "quarto" | "rMarkdown"
 ): CodeCellRenderOptions {
-  const attributes = new Map<string, string>();
-  const header = chunk && chunkHeader(chunk.openingFence);
+  let headerFigureCaption: string | undefined;
+  let headerTableCaption: string | undefined;
+  const header = documentKind === "rMarkdown" && chunk ? chunkHeader(chunk.openingFence) : undefined;
   if (chunk && header !== undefined) {
     const fields = chunkHeaderFields(header, chunk.engine);
     for (const option of rMarkdownOptionFields(fields.options)) {
@@ -229,11 +264,8 @@ export function codeCellRenderOptions(
       if (separator < 1) {
         continue;
       }
-      let name = option.slice(0, separator).trim().replace(/\./g, "-");
-      if (name === "tab-cap") {
-        name = "tbl-cap";
-      }
-      if (!/^[A-Za-z_:][\w:.-]*$/.test(name)) {
+      const name = option.slice(0, separator).trim();
+      if (name !== "fig.cap" && name !== "tab.cap") {
         continue;
       }
       let value = option.slice(separator + 1).trim();
@@ -244,18 +276,25 @@ export function codeCellRenderOptions(
       ) {
         value = value.slice(1, -1);
       }
-      attributes.set(name, value);
+      if (name === "fig.cap") {
+        headerFigureCaption = value;
+      } else {
+        headerTableCaption = value;
+      }
     }
   }
 
+  const pipeOptions = new Map<string, string>();
   const quartoLines = quartoOptionLines(source);
   if (quartoLines.length > 0) {
     try {
-      const parsed = loadYaml(quartoLines.join("\n"));
+      const parsed = loadYaml(quartoLines.join("\n"), {
+        schema: cellOptionYamlSchema,
+      });
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         for (const [name, value] of Object.entries(parsed)) {
           if (name !== "label" && /^[A-Za-z_:][\w:.-]*$/.test(name)) {
-            attributes.set(name, optionValue(value));
+            pipeOptions.set(name, optionValue(value));
           }
         }
       }
@@ -263,7 +302,17 @@ export function codeCellRenderOptions(
       // The editor can temporarily contain incomplete YAML while the user types.
     }
   }
-  return { label: codeCellLabel(source, chunk), attributes };
+  const tablePipeName = documentKind === "quarto" ? "tbl-cap" : "tab-cap";
+  return {
+    label: codeCellLabel(source, chunk),
+    pipeOptions,
+    figureCaption: documentKind === "quarto" || pipeOptions.has("fig-cap")
+      ? pipeOptions.get("fig-cap")
+      : headerFigureCaption,
+    tableCaption: documentKind === "quarto" || pipeOptions.has(tablePipeName)
+      ? pipeOptions.get(tablePipeName)
+      : headerTableCaption,
+  };
 }
 
 export function updateQuartoOptionLines(

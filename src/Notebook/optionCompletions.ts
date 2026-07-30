@@ -16,8 +16,19 @@ import {
 const R_MARKDOWN_OPTIONS_EXPRESSION = [
   'if (requireNamespace("knitr", quietly=TRUE)) {',
   "  options <- knitr::opts_chunk$get()",
-  "  for (name in sort(names(options)))",
-  '    cat("option\\t", name, "\\t", typeof(options[[name]]), "\\n", sep="")',
+  '  knitr_namespace <- asNamespace("knitr")',
+  '  option_types <- get("opts_chunk_attr", knitr_namespace)',
+  '  dash_names <- get("dash_names", knitr_namespace)',
+  "  option_names <- unique(c(names(option_types), names(options)))",
+  "  option_indexes <- as.list(seq_along(option_names))",
+  "  names(option_indexes) <- option_names",
+  "  option_names <- option_names[unlist(dash_names(option_indexes), use.names = FALSE)]",
+  "  for (name in sort(option_names)) {",
+  '    type <- if (name %in% names(options)) typeof(options[[name]]) else option_types[[name]]',
+  '    if (!is.character(type) || length(type) != 1L) type <- ""',
+  "    pipe_name <- names(dash_names(setNames(list(TRUE), name)))[[1L]]",
+  '    cat("option\\t", name, "\\t", type, "\\t", pipe_name, "\\n", sep="")',
+  "  }",
   "}",
 ].join("\n");
 

@@ -278,7 +278,7 @@
     "check-types": "tsc --noEmit -p ./",
     "test": "npm run test:unit && npm run test:r",
     "test:unit": "tsx --test test/**/*.test.ts",
-    "test:r": "Rscript test/r/bridge.test.R",
+    "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package:extension": "npm run check-types && node esbuild.js --production",

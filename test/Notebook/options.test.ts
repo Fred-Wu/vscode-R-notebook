@@ -9,6 +9,7 @@ import {
   chunkHeaderFields,
   quartoOptionFields,
   quartoOptionLines,
+  removeHeaderLabelShadowedByPipe,
   rMarkdownStatusHeader,
   updateChunkHeader,
   updateChunkHeaderFields,
@@ -80,6 +81,17 @@ test("reads and updates a native R Markdown chunk header", () => {
     updateChunkHeaderFields(chunk, "updated-model", "echo=FALSE").openingFence,
     "```{r updated-model, echo=FALSE}\r\n"
   );
+  assert.equal(
+    removeHeaderLabelShadowedByPipe(
+      "#| label: pipe-model\nsummary(model)\n",
+      chunk
+    )?.openingFence,
+    "```{r, eval=FALSE, fig.cap=\"A } caption\"}\r\n"
+  );
+  assert.equal(
+    removeHeaderLabelShadowedByPipe("#| label:\nsummary(model)\n", chunk),
+    undefined
+  );
 });
 
 test("reads and updates leading Quarto pipe options", () => {
@@ -114,19 +126,24 @@ test("reads and updates leading Quarto pipe options", () => {
   assert.deepEqual(
     [...codeCellRenderOptions([
       "#| label: fig-aplot",
+      "#| cache-vars: !expr ls()",
       "#| fig-cap: A plot",
       "#| fig-align: center",
       "plot(cars)",
-    ].join("\n"), undefined).attributes],
-    [["fig-cap", "A plot"], ["fig-align", "center"]]
+    ].join("\n"), undefined, "quarto").pipeOptions],
+    [
+      ["cache-vars", "ls()"],
+      ["fig-cap", "A plot"],
+      ["fig-align", "center"],
+    ]
   );
-  assert.deepEqual(
-    [...codeCellRenderOptions("plot(cars)\n", {
+  assert.equal(
+    codeCellRenderOptions("plot(cars)\n", {
       openingFence: '```{r fig-rmarkdown, fig.cap="A plot, with comma", fig.align="right"}\n',
       closingFence: "```\n",
       engine: "r",
-    }).attributes],
-    [["fig-cap", "A plot, with comma"], ["fig-align", "right"]]
+    }, "rMarkdown").figureCaption,
+    "A plot, with comma"
   );
   assert.equal(
     updateQuartoOptionLines(source, "echo: true\nwarning: false"),

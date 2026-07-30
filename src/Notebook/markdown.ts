@@ -58,22 +58,22 @@ export function nativeTextDocument(
   const replacements: Array<{ token: string; source: string }> = [];
   const shadowCells = cells.map((cell, index): ParsedCell => {
     if (cell.kind === "code") {
-      const renderOptions = codeCellRenderOptions(cell.value, cell.chunk);
-      const attributes = [...renderOptions.attributes].map(([name, value]) => {
-        const escaped = value
-          .replace(/&/g, "&amp;")
-          .replace(/"/g, "&quot;")
-          .replace(/\r\n|\n|\r/g, " ");
-        return `${name}="${escaped}"`;
-      });
+      const renderOptions = codeCellRenderOptions(cell.value, cell.chunk, documentKind);
       const validLabel = /^[A-Za-z][\w:.-]*$/.test(renderOptions.label);
       let placeholder = `<!-- r-notebook-code-cell -->${eol}`;
       if (validLabel && documentKind === "quarto") {
+        const attributes = [...renderOptions.pipeOptions].map(([name, value]) => {
+          const escaped = value
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/\r\n|\n|\r/g, " ");
+          return `${name}="${escaped}"`;
+        });
         const attributeText = attributes.length > 0 ? ` ${attributes.join(" ")}` : "";
         placeholder = `::: {#${renderOptions.label}${attributeText}}${eol}:::${eol}`;
       } else if (validLabel) {
-        const figureCaption = renderOptions.attributes.get("fig-cap");
-        const tableCaption = renderOptions.attributes.get("tbl-cap");
+        const figureCaption = renderOptions.figureCaption;
+        const tableCaption = renderOptions.tableCaption;
         const caption = figureCaption || tableCaption;
         if (caption) {
           const escapedCaption = caption

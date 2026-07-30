@@ -52,8 +52,9 @@ const KNITR_DOCUMENTED_OPTION_VALUES: Readonly<
 
 export function knitrOptionCompletions(output: string): CellOptionCompletions {
   const headerOptions = new Map<string, OptionCompletion>();
+  const pipeNames = new Map<string, string>();
   for (const line of output.split(/\r?\n/)) {
-    const [kind, name, type] = line.split("\t", 3);
+    const [kind, name, type, pipeName] = line.split("\t", 4);
     if (kind !== "option" || !name) {
       continue;
     }
@@ -63,13 +64,16 @@ export function knitrOptionCompletions(output: string): CellOptionCompletions {
       : type === "logical"
         ? { name, values: ["TRUE", "FALSE"] }
         : { name });
+    if (pipeName) {
+      pipeNames.set(name, pipeName);
+    }
   }
   const rMarkdown = [...headerOptions.values()]
     .sort((left, right) => left.name.localeCompare(right.name));
   const quarto = rMarkdown.map((completion) => {
     const documented = KNITR_DOCUMENTED_OPTION_VALUES[completion.name];
     return {
-      name: completion.name.replace(/\./g, "-"),
+      name: pipeNames.get(completion.name) ?? completion.name,
       ...(documented
         ? { values: [...documented.pipe] }
         : completion.values

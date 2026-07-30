@@ -15,6 +15,11 @@ optional: inline code and rendering work without it. Enable the session watcher
 when the inline session should appear in vscode-R features such as the workspace
 and data viewers. Reload VS Code after changing this setting.
 
+In R Markdown notebooks, applying cell-option edits keeps both chunk-header and
+`#|` pipe options. Use **Merge to header** or **Merge to pipe** to combine and
+de-duplicate them. Pipe values win conflicts, matching knitr. Quarto notebooks
+always use pipe options.
+
 The inline R session starts in the background when a notebook becomes active.
 Change `r.notebook.sessionStartup` when a different startup time is preferred:
 

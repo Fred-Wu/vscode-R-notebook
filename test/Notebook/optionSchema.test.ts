@@ -7,18 +7,21 @@ import {
 
 test("uses installed knitr options for both R Markdown cell option styles", () => {
   assert.deepEqual(knitrOptionCompletions([
-    "option\techo\tlogical",
-    "option\terror\tlogical",
-    "option\tfig.align\tcharacter",
-    "option\tfig.keep\tcharacter",
-    "option\tfig.show\tcharacter",
-    "option\tfig.width\tdouble",
-    "option\tresults\tcharacter",
-    "option\ttidy\tlogical",
+    "option\techo\tlogical\techo",
+    "option\tdev\tcharacter\tfig-format",
+    "option\terror\tlogical\terror",
+    "option\tfig.align\tcharacter\tfig-align",
+    "option\tfig.keep\tcharacter\tfig-keep",
+    "option\tfig.show\tcharacter\tfig-show",
+    "option\tfig.width\tdouble\tfig-width",
+    "option\tresults\tcharacter\tresults",
+    "option\ttab.cap\tcharacter\ttab-cap",
+    "option\ttidy\tlogical\ttidy",
     "ignored\twarning\tlogical",
     "",
   ].join("\n")), {
     rMarkdown: [
+      { name: "dev" },
       { name: "echo", values: ["TRUE", "FALSE"] },
       { name: "error", values: ["FALSE", "TRUE", "0", "1", "2"] },
       {
@@ -38,12 +41,14 @@ test("uses installed knitr options for both R Markdown cell option styles", () =
         name: "results",
         values: ["'markup'", "'asis'", "'hold'", "'hide'", "FALSE"],
       },
+      { name: "tab.cap" },
       {
         name: "tidy",
         values: ["FALSE", "TRUE", "'formatR'", "'styler'"],
       },
     ],
     quarto: [
+      { name: "fig-format" },
       { name: "echo", values: ["true", "false"] },
       { name: "error", values: ["false", "true", "0", "1", "2"] },
       {
@@ -63,6 +68,7 @@ test("uses installed knitr options for both R Markdown cell option styles", () =
         name: "results",
         values: ["markup", "asis", "hold", "hide", "false"],
       },
+      { name: "tab-cap" },
       {
         name: "tidy",
         values: ["false", "true", "formatR", "styler"],

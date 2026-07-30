@@ -6,8 +6,12 @@ import {
 import { RNotebookController } from "./Notebook/controller";
 import { RNotebookEditing } from "./Notebook/editing";
 import { CellOptionCompletionProvider } from "./Notebook/optionCompletions";
+import { mergeRMarkdownCellOptions } from "./Notebook/optionMerge";
 import { CellOptionsEditor } from "./Notebook/optionsEditor";
-import { codeCellLabel } from "./Notebook/options";
+import {
+  codeCellLabel,
+  removeHeaderLabelShadowedByPipe,
+} from "./Notebook/options";
 import { RNotebookMarkdownCompletionProvider } from "./Notebook/markdownCompletions";
 import { RMarkdownCellStatusBarProvider } from "./Notebook/statusBar";
 import { RNotebookSerializer } from "./Notebook/serializer";
@@ -240,7 +244,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
     (notebookUri, documentKind) =>
-      optionCompletions.load(notebookUri, documentKind)
+      optionCompletions.load(notebookUri, documentKind),
+    (notebookUri, headerOptions, pipeOptions, target) =>
+      mergeRMarkdownCellOptions(
+        notebookUri,
+        context.asAbsolutePath("resources/r/merge_options.R"),
+        headerOptions,
+        pipeOptions,
+        target
+      )
   );
   const cellStatusBar = new RMarkdownCellStatusBarProvider();
   const consoleTransport = new RConsoleTransport(sessionIntegrationEnabled);
@@ -540,9 +552,29 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeNotebookDocument(({
       notebook,
       contentChanges,
+      cellChanges,
     }) => {
       if (notebook.notebookType !== NOTEBOOK_TYPE) {
         return;
+      }
+      if (!/\.qmd$/i.test(notebook.uri.fsPath)) {
+        const labelEdits = cellChanges.flatMap(({ cell, document }) => {
+          const chunk = (cell.metadata as RNotebookCellMetadata).rNotebook;
+          const nextChunk = document && chunk
+            ? removeHeaderLabelShadowedByPipe(document.getText(), chunk)
+            : undefined;
+          return nextChunk
+            ? [vscode.NotebookEdit.updateCellMetadata(cell.index, {
+              ...cell.metadata,
+              rNotebook: nextChunk,
+            })]
+            : [];
+        });
+        if (labelEdits.length > 0) {
+          const edit = new vscode.WorkspaceEdit();
+          edit.set(notebook.uri, labelEdits);
+          void vscode.workspace.applyEdit(edit);
+        }
       }
       const hasUnpreparedCell = contentChanges.some((change) =>
         change.addedCells.some((cell) =>

@@ -490,14 +490,15 @@ export class RNotebookMarkdownCompletionProvider implements
       }
       const chunk = (cell.metadata as RNotebookCellMetadata).rNotebook;
       const source = cell.document.getText();
-      const renderOptions = codeCellRenderOptions(source, chunk);
+      const documentKind = isQuarto ? "quarto" : "rMarkdown";
+      const renderOptions = codeCellRenderOptions(source, chunk, documentKind);
       const label = renderOptions.label;
       if (/^[A-Za-z][\w:.-]*$/.test(label)) {
         codeLabels.add(label);
-        if (renderOptions.attributes.get("fig-cap")) {
+        if (renderOptions.figureCaption) {
           figureLabels.add(label);
         }
-        if (renderOptions.attributes.get("tbl-cap")) {
+        if (renderOptions.tableCaption) {
           tableLabels.add(label);
         }
       }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { RNotebookCellMetadata } from "./document";
+import type { MergedCellOptions } from "./optionMerge";
 import type { CellOptionCompletions } from "./optionSchema";
 import {
   CELL_OPTIONS_MIME,
@@ -17,7 +18,7 @@ import {
 interface RendererMessage {
   type?: unknown;
   requestId?: unknown;
-  optionStyle?: unknown;
+  action?: unknown;
   label?: unknown;
   headerOptions?: unknown;
   quartoOptions?: unknown;
@@ -31,7 +32,13 @@ export class CellOptionsEditor implements vscode.Disposable {
     private readonly loadCompletions: (
       notebookUri: vscode.Uri,
       documentKind: "quarto" | "rMarkdown"
-    ) => Promise<CellOptionCompletions>
+    ) => Promise<CellOptionCompletions>,
+    private readonly mergeOptions: (
+      notebookUri: vscode.Uri,
+      headerOptions: string,
+      pipeOptions: string,
+      target: "header" | "pipe"
+    ) => Promise<MergedCellOptions>
   ) {
     this.receiver = messaging.onDidReceiveMessage(({ editor, message }) => {
       void this.receiveMessage(editor, message as RendererMessage);
@@ -64,15 +71,10 @@ export class CellOptionsEditor implements vscode.Disposable {
       cell.notebook.uri,
       documentKind
     );
-    const optionStyle = documentKind === "quarto" ||
-      (!fields.label && !fields.options && (quartoFields.label || quartoFields.options))
-      ? "quarto"
-      : "rMarkdown";
     const formData: CellOptionsFormData = {
       requestId: randomUUID(),
       documentKind,
-      optionStyle,
-      label: optionStyle === "quarto" ? quartoFields.label : fields.label,
+      label: quartoFields.label || fields.label,
       headerOptions: fields.options,
       quartoOptions: quartoFields.options,
       rMarkdownCompletions: completions.rMarkdown,
@@ -150,7 +152,9 @@ export class CellOptionsEditor implements vscode.Disposable {
 
     try {
       if (
-        (message.optionStyle !== "quarto" && message.optionStyle !== "rMarkdown") ||
+        (message.action !== "apply" &&
+          message.action !== "mergeToHeader" &&
+          message.action !== "mergeToPipe") ||
         typeof message.label !== "string" ||
         typeof message.headerOptions !== "string" ||
         typeof message.quartoOptions !== "string"
@@ -161,18 +165,56 @@ export class CellOptionsEditor implements vscode.Disposable {
       if (!chunk) {
         throw new Error("The target code cell is no longer available.");
       }
-      const useHeader = path.extname(formCell.notebook.uri.fsPath).toLowerCase() !== ".qmd" &&
-        message.optionStyle === "rMarkdown";
+      const rMarkdown = path.extname(formCell.notebook.uri.fsPath).toLowerCase() !== ".qmd";
+      if (!rMarkdown && message.action !== "apply") {
+        throw new Error("Quarto cells always use pipe options.");
+      }
+      let headerOptions = rMarkdown ? message.headerOptions : "";
+      let pipeOptions = message.quartoOptions;
+      let headerLabel = "";
+      let pipeLabel = rMarkdown ? "" : message.label;
+      if (message.action === "mergeToHeader" || message.action === "mergeToPipe") {
+        const target = message.action === "mergeToHeader" ? "header" : "pipe";
+        const merged = await this.mergeOptions(
+          formCell.notebook.uri,
+          headerOptions,
+          pipeOptions,
+          target
+        );
+        headerLabel = target === "header" ? message.label : "";
+        headerOptions = merged.headerOptions;
+        pipeLabel = target === "pipe" ? message.label : "";
+        pipeOptions = merged.pipeOptions;
+      } else if (rMarkdown && message.label.trim()) {
+        const header = chunkHeader(chunk.openingFence);
+        const currentHeaderLabel = header === undefined
+          ? ""
+          : chunkHeaderFields(header, chunk.engine).label;
+        const currentPipeLabel = quartoOptionFields(
+          formCell.document.getText()
+        ).label;
+        if (currentPipeLabel) {
+          pipeLabel = message.label;
+        } else if (
+          currentHeaderLabel ||
+          headerOptions.trim() ||
+          !pipeOptions.trim()
+        ) {
+          headerLabel = message.label;
+        } else {
+          pipeLabel = message.label;
+        }
+      }
       const nextChunk = updateChunkHeaderFields(
         chunk,
-        useHeader ? message.label : "",
-        useHeader ? message.headerOptions : ""
+        headerLabel,
+        headerOptions
       );
       const source = formCell.document.getText();
       const nextSource = updateQuartoOptionFields(
         source,
-        useHeader ? "" : message.label,
-        useHeader ? "" : message.quartoOptions
+        pipeLabel,
+        pipeOptions
       );
       const edit = new vscode.WorkspaceEdit();
       edit.set(formCell.notebook.uri, [
