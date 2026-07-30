@@ -21,6 +21,7 @@ import {
   writeNotebookStateFile,
   type NotebookState,
 } from "./Notebook/state";
+import { TextRenderCancelledError } from "./Runtime/bridge";
 import { RConsoleTransport } from "./Runtime/console";
 import {
   isVscodeRWorkingDirectoryAccepted,
@@ -396,6 +397,9 @@ export function activate(context: vscode.ExtensionContext): void {
           ...result,
         }, editor);
       } catch (error) {
+        if (error instanceof TextRenderCancelledError) {
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[Markdown] ${message}`);
         await markdownMessaging.postMessage({

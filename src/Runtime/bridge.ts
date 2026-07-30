@@ -13,6 +13,8 @@ export interface BridgeOutput {
   name?: string;
 }
 
+export class TextRenderCancelledError extends Error {}
+
 interface BridgeResult {
   success: boolean;
   outputs: BridgeOutput[];
@@ -326,7 +328,8 @@ export class RExecutionBridge {
   async renderText(
     cells: readonly { token: string; source: string }[],
     documentSource: string,
-    documentPath: string
+    documentPath: string,
+    token?: vscode.CancellationToken
   ): Promise<string> {
     const requestDirectory = await fsPromises.mkdtemp(
       path.join(os.tmpdir(), "r-notebook-text-")
@@ -335,6 +338,8 @@ export class RExecutionBridge {
     const requestPath = path.join(requestDirectory, "request.R");
     let completion: ReturnType<typeof waitForDone> | undefined;
     let dispatch: InlineDispatch | undefined;
+    let cancellation: vscode.Disposable | undefined;
+    let cancelled = false;
     try {
       const snapshotPath = await snapshotDocument(
         requestDirectory,
@@ -363,12 +368,30 @@ export class RExecutionBridge {
         "utf8"
       );
       completion = waitForDone(requestDirectory);
+      if (token?.isCancellationRequested) {
+        throw new TextRenderCancelledError();
+      }
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
+      const interrupt = (): void => {
+        if (cancelled) {
+          return;
+        }
+        cancelled = true;
+        this.transport.interrupt();
+      };
+      cancellation = token?.onCancellationRequested(interrupt);
+      if (token?.isCancellationRequested) {
+        interrupt();
+      }
       await Promise.race([completion.promise, dispatch.failure]);
+      if (cancelled) {
+        throw new TextRenderCancelledError();
+      }
       return await readTextResult(requestDirectory);
     } finally {
+      cancellation?.dispose();
       dispatch?.dispose();
       completion?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });

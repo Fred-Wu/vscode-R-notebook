@@ -13,7 +13,11 @@ import {
 } from "./document";
 import { nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
 import { notebookSourceHash } from "./state";
-import { RExecutionBridge, type BridgeOutput } from "../Runtime/bridge";
+import {
+  RExecutionBridge,
+  TextRenderCancelledError,
+  type BridgeOutput,
+} from "../Runtime/bridge";
 import { type HiddenRProcess } from "../Runtime/process";
 import { InlineAttachmentCoordinator } from "../Runtime/attachment";
 import {
@@ -37,6 +41,7 @@ interface NotebookSession {
   pendingTextRender?: {
     key: string;
     promise: Promise<string>;
+    cancellation: vscode.CancellationTokenSource;
   };
 }
 
@@ -347,6 +352,7 @@ export class RNotebookController implements vscode.Disposable {
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
+      session.pendingTextRender?.cancellation.cancel();
       const task = session.queue.then(async () => {
         if (!session.stopped && this.sessions.get(key) === session) {
           await this.executeCell(cell, session);
@@ -487,9 +493,14 @@ export class RNotebookController implements vscode.Disposable {
         newDocument: true,
       }));
     }
+    session.pendingTextRender?.cancellation.cancel();
+    const cancellation = new vscode.CancellationTokenSource();
     const task = session.queue.then(async () => {
       if (session.stopped || this.sessions.get(sessionKey) !== session) {
         throw new Error("The notebook's R session has closed.");
+      }
+      if (cancellation.token.isCancellationRequested) {
+        throw new TextRenderCancelledError();
       }
       this.attachment.beginExecution(session.process);
       try {
@@ -500,7 +511,8 @@ export class RNotebookController implements vscode.Disposable {
         const html = await session.bridge.renderText(
           nativeDocument.replacements,
           nativeDocument.source,
-          notebook.uri.fsPath
+          notebook.uri.fsPath,
+          cancellation.token
         );
         if (notebookSourceHash(this.notebookContext(notebook).source) === sourceHash) {
           await this.updateNativeTextCache(notebook, {
@@ -521,8 +533,9 @@ export class RNotebookController implements vscode.Disposable {
     });
     const settled = task.then(() => undefined, () => undefined);
     session.queue = settled;
-    session.pendingTextRender = { key: renderKey, promise: task };
+    session.pendingTextRender = { key: renderKey, promise: task, cancellation };
     void settled.then(() => {
+      cancellation.dispose();
       if (session.pendingTextRender?.promise === task) {
         session.pendingTextRender = undefined;
       }

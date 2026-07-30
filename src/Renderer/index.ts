@@ -194,6 +194,7 @@ async function applyResponse(response: RenderResponse): Promise<void> {
         : "";
       const signature = `${assetSignature}\n${cellTitle}\n${renderedCell.outerHTML}`;
       if (element !== placeholder && renderedSignatures.get(element) === signature) {
+        element.removeAttribute("data-r-notebook-text-request");
         continue;
       }
 
