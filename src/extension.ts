@@ -239,7 +239,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const optionCompletions = new CellOptionCompletionProvider(output);
   const markdownCompletions = new RNotebookMarkdownCompletionProvider(output);
-  const quartoConfigurationWatcher = vscode.workspace.createFileSystemWatcher(
+  const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
   );
   const cellOptionsEditor = new CellOptionsEditor(
@@ -267,11 +267,17 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.hasRunningSession(notebook.uri)
     )
   );
-  const refreshQuartoCompletions = (): void => {
+  const refreshYamlDependencies = (): void => {
     markdownCompletions.invalidateQuartoFormats();
-    vscode.workspace.notebookDocuments.forEach((notebook) =>
-      markdownCompletions.prepareQuarto(notebook)
-    );
+    vscode.workspace.notebookDocuments.forEach((notebook) => {
+      markdownCompletions.prepareQuarto(notebook);
+      if (notebook.notebookType === NOTEBOOK_TYPE) {
+        void controller.refreshMarkdown(notebook).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          output.appendLine(`[Markdown] Could not refresh YAML changes: ${message}`);
+        });
+      }
+    });
   };
   vscode.workspace.notebookDocuments.forEach((notebook) =>
     markdownCompletions.prepareQuarto(notebook)
@@ -310,10 +316,10 @@ export function activate(context: vscode.ExtensionContext): void {
     cellOptionsEditor,
     cellStatusBar,
     markdownCompletions,
-    quartoConfigurationWatcher,
-    quartoConfigurationWatcher.onDidChange(refreshQuartoCompletions),
-    quartoConfigurationWatcher.onDidCreate(refreshQuartoCompletions),
-    quartoConfigurationWatcher.onDidDelete(refreshQuartoCompletions),
+    yamlWatcher,
+    yamlWatcher.onDidChange(refreshYamlDependencies),
+    yamlWatcher.onDidCreate(refreshYamlDependencies),
+    yamlWatcher.onDidDelete(refreshYamlDependencies),
     vscode.languages.registerCompletionItemProvider(
       { language: "markdown", notebookType: NOTEBOOK_TYPE },
       markdownCompletions

@@ -596,6 +596,10 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   async refreshMarkdown(notebook: vscode.NotebookDocument): Promise<void> {
+    const pending = this.sessions.get(notebook.uri.toString())
+      ?.pendingTextRender;
+    pending?.cancellation.cancel();
+    await pending?.promise.catch(() => undefined);
     await this.updateNativeTextCache(notebook, undefined);
     this.markdownStateChanged.fire(notebook);
   }
