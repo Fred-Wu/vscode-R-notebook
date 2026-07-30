@@ -13,12 +13,16 @@ import {
   inspectQuartoFormats,
   mergeQuartoFormats,
   quartoCompletionDocumentation,
-  quartoFormatApplies,
   quartoFrontMatterFormatContext,
   type QuartoFormatInspection as InspectedQuartoFormats,
   type QuartoFrontMatterFormats,
   type QuartoFormats,
 } from "./quartoFormats";
+import {
+  quartoAttributeGroupApplies,
+  type QuartoAttributeContext,
+  type QuartoAttributeGroup,
+} from "./quartoAttributes";
 
 interface QuartoCompletion {
   type?: "key" | "value";
@@ -50,13 +54,6 @@ interface QuartoEditorModule {
 interface QuartoAttributeCompletion {
   value?: unknown;
   doc?: unknown;
-}
-
-interface QuartoAttributeGroup {
-  contexts?: unknown;
-  formats?: unknown;
-  filter?: unknown;
-  completions?: unknown;
 }
 
 interface QuartoEditorSupport {
@@ -384,12 +381,10 @@ export class RNotebookMarkdownCompletionProvider implements
     const simpleDiv = openingBrace < 0
       ? /^(\s*:{3,}\s+)([\w.-]*)$/.exec(beforeCursor)
       : undefined;
-    let context: "div" | "heading" | "figure" | "codeblock" | undefined;
-    let attributes = "";
+    let context: QuartoAttributeContext | undefined;
     let token = "";
     if (simpleDiv?.[2] !== undefined) {
       context = "div";
-      attributes = simpleDiv[2];
       token = simpleDiv[2];
     } else if (openingBrace >= 0) {
       const beforeBrace = line.slice(0, openingBrace);
@@ -406,7 +401,6 @@ export class RNotebookMarkdownCompletionProvider implements
       if (!context || (closingBrace >= 0 && position.character > closingBrace)) {
         return [];
       }
-      attributes = line.slice(openingBrace + 1, closingBrace < 0 ? line.length : closingBrace);
       token = beforeCursor.slice(openingBrace + 1).split(/\s+/).pop() ?? "";
     }
     if (!context) {
@@ -421,16 +415,7 @@ export class RNotebookMarkdownCompletionProvider implements
     );
     const items = new Map<string, vscode.CompletionItem>();
     for (const group of groups) {
-      if (
-        !Array.isArray(group.contexts) ||
-        !group.contexts.includes(context) ||
-        !quartoFormatApplies(
-          Array.isArray(group.formats) ? group.formats : [],
-          formats
-        ) ||
-        (typeof group.filter === "string" && !new RegExp(group.filter).test(attributes)) ||
-        !Array.isArray(group.completions)
-      ) {
+      if (!quartoAttributeGroupApplies(group, context, formats, line)) {
         continue;
       }
       for (const candidate of group.completions as QuartoAttributeCompletion[]) {
