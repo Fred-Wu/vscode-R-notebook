@@ -120,7 +120,12 @@ async function launchOptions(
 
   return {
     executable: resolveRExecutable(notebookUri),
-    args: ["--quiet", "--no-save", "--no-restore", "--interactive"],
+    args: [
+      "--quiet",
+      "--no-save",
+      "--no-restore",
+      process.platform === "win32" ? "--ess" : "--interactive",
+    ],
     cwd: startupDirectory,
     env,
     initialization,

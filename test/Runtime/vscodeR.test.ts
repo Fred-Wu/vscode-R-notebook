@@ -10,10 +10,13 @@ import {
   VscodeRSessionRequestWatcher,
 } from "../../src/Runtime/vscodeR";
 
-test("disables vscode-R plot viewers before initialising an inline session", () => {
+test("disables unused vscode-R integrations before initialising an inline session", () => {
   const initialization = createVscodeRAttachmentInitialization();
   const disableViewers = initialization.command.indexOf(
     "vsc.plot = FALSE,\n      vsc.use_httpgd = FALSE"
+  );
+  const disableRStudioApi = initialization.command.indexOf(
+    "vsc.rstudioapi = FALSE"
   );
   const nullDevice = initialization.command.indexOf(
     "device = function(...) grDevices::pdf(NULL)"
@@ -21,7 +24,8 @@ test("disables vscode-R plot viewers before initialising an inline session", () 
   const initializeVscodeR = initialization.command.indexOf("base::sys.source(init_file");
 
   assert.ok(disableViewers >= 0);
-  assert.ok(nullDevice > disableViewers);
+  assert.ok(disableRStudioApi > disableViewers);
+  assert.ok(nullDevice > disableRStudioApi);
   assert.ok(initializeVscodeR > nullDevice);
 });
 

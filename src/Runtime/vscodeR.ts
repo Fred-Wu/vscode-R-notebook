@@ -47,6 +47,7 @@ export function createVscodeRAttachmentInitialization(): NonNullable<
     "    base::options(",
     "      vsc.plot = FALSE,",
     "      vsc.use_httpgd = FALSE,",
+    "      vsc.rstudioapi = FALSE,",
     "      device = function(...) grDevices::pdf(NULL)",
     "    )",
     "    initialized_now <- FALSE",

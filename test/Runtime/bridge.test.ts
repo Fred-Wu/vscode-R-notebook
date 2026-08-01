@@ -152,7 +152,7 @@ test("the R bridge attaches once, persists state, and isolates processes", async
       "--quiet",
       "--no-save",
       "--no-restore",
-      "--interactive",
+      process.platform === "win32" ? "--ess" : "--interactive",
     ],
     cwd: directory,
     env: { ...process.env, R_PROFILE_USER: profilePath },

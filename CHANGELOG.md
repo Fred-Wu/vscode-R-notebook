@@ -4,6 +4,8 @@ All notable changes to R Notebook for VS Code will be documented in this file.
 
 ## Unreleased
 
+- Fixed automatic vscode-R session attachment for notebook R processes on Windows.
+- Disabled unused RStudio API emulation in inline notebook R sessions.
 - Made the vscode-R session watcher optional for inline code and rendering.
 - Added background, first-run, and manual choices for starting notebook R sessions.
 - Added a visible startup message and a Start R Session button for manual startup.
