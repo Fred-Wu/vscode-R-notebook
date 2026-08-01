@@ -12,24 +12,22 @@ Open R Markdown (`.rmd`) and Quarto (`.qmd`) files as VS Code notebooks, render 
 
 Set the correct `r.rpath.*` option in vscode-R. Its `r.sessionWatcher` setting is
 optional: inline code and rendering work without it. Enable the session watcher
-when the inline session should appear in vscode-R features such as the workspace
-and data viewers. Reload VS Code after changing this setting.
+and the **R Extension Integration** checkbox when the inline session
+should appear in vscode-R features such as the workspace, data, and help viewers.
+Reload VS Code after changing either setting.
 
 In R Markdown notebooks, applying cell-option edits keeps both chunk-header and
 `#|` pipe options. Use **Merge to header** or **Merge to pipe** to combine and
 de-duplicate them. Pipe values win conflicts, matching knitr. Quarto notebooks
 always use pipe options.
 
-The inline R session starts in the background when a notebook becomes active.
-Change `r.notebook.sessionStartup` when a different startup time is preferred:
+The hidden R process starts automatically when a notebook becomes active and runs
+the notebook's code and Markdown rendering. Its lifetime is independent of
+vscode-R integration. To run without sourcing vscode-R session integration, clear:
 
 ```json
-"r.notebook.sessionStartup": "background"
+"r.notebook.rExtensionIntegration": false
 ```
-
-- `background` starts the session while the active notebook is being prepared.
-- `onExecution` starts the session when the first code cell runs.
-- `manual` shows **Start R Session** until the session starts, then shows **Restart R Session**. It never starts the session implicitly.
 
 ## Features
  - Render markdown cells as you go. 

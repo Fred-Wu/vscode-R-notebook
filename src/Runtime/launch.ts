@@ -135,13 +135,11 @@ async function launchOptions(
 export function createInlineRProcess(
   notebookUri: vscode.Uri,
   output: vscode.OutputChannel,
-  runningChanged: ((running: boolean) => void) | undefined,
   sessionIntegrationEnabled: boolean
 ): HiddenRProcess {
   const notebookName = path.basename(notebookUri.fsPath);
   return new HiddenRProcess(
     () => launchOptions(notebookUri, output, sessionIntegrationEnabled),
-    (message) => output.appendLine(`[${notebookName}] ${message}`),
-    runningChanged
+    (message) => output.appendLine(`[${notebookName}] ${message}`)
   );
 }

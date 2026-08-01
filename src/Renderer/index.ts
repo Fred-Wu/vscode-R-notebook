@@ -23,7 +23,6 @@ interface RenderResponse {
   html?: string;
   cells?: Array<{ id: string; marker: string }>;
   newDocument?: boolean;
-  waiting?: string;
   error?: string;
 }
 
@@ -114,10 +113,6 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     .map((root) => root.querySelector<HTMLElement>(selector))
     .find((element) => element !== null);
   if (!placeholder) {
-    return;
-  }
-  if (response.waiting) {
-    placeholder.title = response.waiting;
     return;
   }
   if (

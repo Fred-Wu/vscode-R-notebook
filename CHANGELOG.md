@@ -7,9 +7,9 @@ All notable changes to R Notebook for VS Code will be documented in this file.
 - Fixed automatic vscode-R session attachment for notebook R processes on Windows.
 - Disabled unused RStudio API emulation in inline notebook R sessions.
 - Made the vscode-R session watcher optional for inline code and rendering.
-- Added background, first-run, and manual choices for starting notebook R sessions.
-- Added a visible startup message and a Start R Session button for manual startup.
-- In manual startup mode, show Start R Session before the session starts and Restart R Session after it starts.
+- Started the hidden notebook R process automatically, independently of vscode-R integration.
+- Added an R Extension Integration checkbox for inline notebook R processes.
+- Renamed Restart R Session to Restart R and removed the manual start command.
 - Replaced built-in notebook suggestion lists with suggestions based on installed tools and notebook contents.
 - Added suggestions while typing in Quarto YAML headers without interrupting Markdown writing.
 - Kept R Markdown cell-option suggestions out of Quarto notebooks.

@@ -191,10 +191,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
   let controller: RNotebookController;
-  const sessionIntegrationEnabled = vscode.workspace
+  const vscodeRSessionWatcherEnabled = vscode.workspace
     .getConfiguration("r")
     .get<boolean>("sessionWatcher", true);
-  const sessionRequestWatcher = sessionIntegrationEnabled
+  const notebookRExtensionIntegrationEnabled = vscode.workspace
+    .getConfiguration("r.notebook")
+    .get<boolean>("rExtensionIntegration", true);
+  const sessionRequestWatcher = vscodeRSessionWatcherEnabled
     ? new VscodeRSessionRequestWatcher(
       async (request) => {
         const workspaceDirectories = vscode.workspace.workspaceFolders?.map(
@@ -228,7 +231,7 @@ export function activate(context: vscode.ExtensionContext): void {
         attachmentCheckpoint
       );
     },
-    sessionIntegrationEnabled
+    vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
   const editing = new RNotebookEditing();
   const markdownMessaging = vscode.notebooks.createRendererMessaging(
@@ -256,17 +259,7 @@ export function activate(context: vscode.ExtensionContext): void {
       )
   );
   const cellStatusBar = new RMarkdownCellStatusBarProvider();
-  const consoleTransport = new RConsoleTransport(sessionIntegrationEnabled);
-  const updateSessionContext = (
-    notebook = vscode.window.activeNotebookEditor?.notebook
-  ): Thenable<unknown> => vscode.commands.executeCommand(
-    "setContext",
-    "r.notebook.sessionRunning",
-    Boolean(
-      notebook?.notebookType === NOTEBOOK_TYPE &&
-      controller.hasRunningSession(notebook.uri)
-    )
-  );
+  const consoleTransport = new RConsoleTransport(vscodeRSessionWatcherEnabled);
   const refreshYamlDependencies = (): void => {
     markdownCompletions.invalidateQuartoFormats();
     vscode.workspace.notebookDocuments.forEach((notebook) => {
@@ -300,12 +293,6 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     controller,
     controller.onDidChangeNotebookState(saveNotebookState),
-    controller.onDidChangeSessionState((uri) => {
-      const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
-      if (activeNotebook?.uri.toString() === uri.toString()) {
-        void updateSessionContext(activeNotebook);
-      }
-    }),
     controller.onDidShutdownSession((uri) => {
       const key = uri.toString();
       if (!hasOpenSourceEditor(key)) {
@@ -338,14 +325,6 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.workspace.notebookDocuments.forEach((notebook) =>
           markdownCompletions.prepareQuarto(notebook)
         );
-      }
-      if (event.affectsConfiguration("r.notebook.sessionStartup")) {
-        const activeNotebook = vscode.window.activeNotebookEditor?.notebook;
-        void controller.selectNotebook(activeNotebook)
-          .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            output.appendLine(`[Session] Could not start the selected notebook: ${message}`);
-          });
       }
     }),
     controller.onDidChangeMarkdownState((notebook) => {
@@ -531,7 +510,6 @@ export function activate(context: vscode.ExtensionContext): void {
         "r.notebook.activeEditor",
         editor?.notebook.notebookType === NOTEBOOK_TYPE
       );
-      void updateSessionContext(editor?.notebook);
       if (
         editor &&
         textEditorDocuments.delete(editor.notebook.uri.toString())
@@ -671,24 +649,11 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       try {
         if (await controller.restartSession(notebook)) {
-          void vscode.window.showInformationMessage("R notebook session restarted.");
+          void vscode.window.showInformationMessage("R restarted.");
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        void vscode.window.showErrorMessage(`Could not restart the R session: ${message}`);
-      }
-    }),
-    vscode.commands.registerCommand("r-notebook.startSession", async (candidate?: unknown) => {
-      const notebook = notebookForCommand(candidate);
-      if (!notebook) {
-        void vscode.window.showInformationMessage("Open an R Markdown or Quarto notebook first.");
-        return;
-      }
-      try {
-        await controller.startSession(notebook, true);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        void vscode.window.showErrorMessage(`Could not start the R session: ${message}`);
+        void vscode.window.showErrorMessage(`Could not restart R: ${message}`);
       }
     }),
     vscode.commands.registerCommand("r-notebook.reopenRunningSession", async () => {
@@ -759,7 +724,6 @@ export function activate(context: vscode.ExtensionContext): void {
     "r.notebook.activeEditor",
     vscode.window.activeNotebookEditor?.notebook.notebookType === NOTEBOOK_TYPE
   );
-  void updateSessionContext();
   void controller.selectNotebook(vscode.window.activeNotebookEditor?.notebook).catch(
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);

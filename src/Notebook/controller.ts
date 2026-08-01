@@ -50,20 +50,7 @@ type TextRenderResult = {
   marker: string;
   cells: Array<{ id: string; marker: string }>;
   newDocument: boolean;
-} | {
-  waiting: string;
 };
-
-type SessionStartupMode = "background" | "onExecution" | "manual";
-
-export function sessionStartupMode(notebookUri: vscode.Uri): SessionStartupMode {
-  const configured = vscode.workspace
-    .getConfiguration("r.notebook", notebookUri)
-    .get<string>("sessionStartup", "background");
-  return configured === "onExecution" || configured === "manual"
-    ? configured
-    : "background";
-}
 
 function assertRCell(cell: vscode.NotebookCell): void {
   const metadata = cell.metadata as RNotebookCellMetadata;
@@ -96,8 +83,6 @@ export class RNotebookController implements vscode.Disposable {
   readonly onDidChangeNotebookState = this.notebookStateChanged.event;
   private readonly sessionShutdown = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidShutdownSession = this.sessionShutdown.event;
-  private readonly sessionStateChanged = new vscode.EventEmitter<vscode.Uri>();
-  readonly onDidChangeSessionState = this.sessionStateChanged.event;
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
   private executionOrder = 0;
@@ -127,11 +112,6 @@ export class RNotebookController implements vscode.Disposable {
       const process = createInlineRProcess(
         notebook.uri,
         this.output,
-        () => {
-          if (this.sessions.get(key)?.process === process) {
-            this.sessionStateChanged.fire(notebook.uri);
-          }
-        },
         this.sessionIntegrationEnabled
       );
       session = {
@@ -178,7 +158,7 @@ export class RNotebookController implements vscode.Disposable {
     return startup;
   }
 
-  async startSession(
+  private async startR(
     notebook: vscode.NotebookDocument,
     refreshMarkdown = false
   ): Promise<void> {
@@ -271,10 +251,6 @@ export class RNotebookController implements vscode.Disposable {
     return this.sessions.has(notebookUri.toString());
   }
 
-  hasRunningSession(notebookUri: vscode.Uri): boolean {
-    return this.sessions.get(notebookUri.toString())?.process.running ?? false;
-  }
-
   prefer(notebook: vscode.NotebookDocument): void {
     if (notebook.notebookType === NOTEBOOK_TYPE) {
       this.controller.updateNotebookAffinity(
@@ -315,40 +291,10 @@ export class RNotebookController implements vscode.Disposable {
       this.markSessionOpen(existingSession);
     }
     await this.attachment.select(existingSession?.process);
-    if (sessionStartupMode(notebook.uri) === "background") {
-      await this.startSession(notebook, true);
-    }
+    await this.startR(notebook, true);
   }
 
   private async execute(cells: readonly vscode.NotebookCell[]): Promise<void> {
-    const notebook = cells[0]?.notebook;
-    const session = notebook
-      ? this.sessions.get(notebook.uri.toString())
-      : undefined;
-    if (
-      notebook &&
-      sessionStartupMode(notebook.uri) === "manual" &&
-      !session?.startup &&
-      !session?.process.running
-    ) {
-      const start = "Start R Session";
-      if (await vscode.window.showWarningMessage(
-        "The R notebook session has not been started.",
-        start
-      ) !== start) {
-        return;
-      }
-      try {
-        await this.startSession(notebook);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        void vscode.window.showErrorMessage(
-          `Could not start the R notebook session: ${message}`
-        );
-        return;
-      }
-    }
-
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
@@ -469,18 +415,6 @@ export class RNotebookController implements vscode.Disposable {
     }
     const sessionKey = notebook.uri.toString();
     let session = this.sessions.get(sessionKey);
-    const startupMode = sessionStartupMode(notebook.uri);
-    if (
-      startupMode !== "background" &&
-      !session?.startup &&
-      !session?.process.running
-    ) {
-      return Promise.resolve({
-        waiting: startupMode === "manual"
-          ? "Start the R session to render this Markdown."
-          : "Run a code cell to start the R session and render this Markdown.",
-      });
-    }
     if (!session) {
       session = this.getSession(notebook);
     }
@@ -662,7 +596,6 @@ export class RNotebookController implements vscode.Disposable {
     }
     this.attachment.forget(session.process);
     session.process.dispose();
-    this.sessionStateChanged.fire(notebookUri);
     this.sessionShutdown.fire(notebookUri);
   }
 
@@ -807,7 +740,6 @@ export class RNotebookController implements vscode.Disposable {
     this.markdownStateChanged.dispose();
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
-    this.sessionStateChanged.dispose();
     this.controller.dispose();
   }
 }
