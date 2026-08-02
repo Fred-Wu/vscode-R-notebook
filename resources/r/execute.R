@@ -97,6 +97,162 @@ r_notebook_capture_session_state <- function(
   base::invisible()
 }
 
+r_notebook_data_frame_type <- function(value) {
+  if (base::is.ordered(value)) {
+    return("ord")
+  }
+  if (base::is.factor(value)) {
+    return("fctr")
+  }
+  if (base::inherits(value, "IDate")) {
+    return("IDat")
+  }
+  if (base::inherits(value, "Date")) {
+    return("Date")
+  }
+  if (base::inherits(value, "POSIXt")) {
+    return("POSc")
+  }
+  if (base::inherits(value, "integer64")) {
+    return("i64")
+  }
+  switch(
+    base::typeof(value),
+    logical = "lgcl",
+    integer = "int",
+    double = "num",
+    complex = "cplx",
+    character = "char",
+    raw = "raw",
+    list = "list",
+    expression = "expr",
+    base::typeof(value)
+  )
+}
+
+r_notebook_compact_data_frame <- function(value, compact = TRUE) {
+  row_count <- base::nrow(value)
+  column_count <- base::ncol(value)
+  edge_count <- 10L
+  omitted_count <- if (base::isTRUE(compact)) {
+    base::max(0L, row_count - edge_count * 2L)
+  } else {
+    0L
+  }
+  displayed_rows <- if (omitted_count > 0L) {
+    c(
+      base::seq_len(edge_count),
+      base::seq.int(row_count - edge_count + 1L, row_count)
+    )
+  } else {
+    base::seq_len(row_count)
+  }
+  displayed <- base::as.data.frame(
+    value[displayed_rows, , drop = FALSE]
+  )
+  base::row.names(displayed) <- displayed_rows
+  summary <- base::sprintf(
+    "%s rows × %s columns%s",
+    base::format(row_count, big.mark = ",", scientific = FALSE),
+    base::format(column_count, big.mark = ",", scientific = FALSE),
+    if (omitted_count > 0L) {
+      base::sprintf(
+        " — first %d and last %d shown; %s rows omitted",
+        edge_count,
+        edge_count,
+        base::format(omitted_count, big.mark = ",", scientific = FALSE)
+      )
+    } else {
+      ""
+    }
+  )
+  table <- knitr::kable(displayed, format = "html", escape = TRUE, row.names = TRUE)
+  table_parts <- base::strsplit(table, "</tr>", fixed = TRUE)[[1L]]
+  type_row <- base::paste0(
+    '\n  <tr class="vsc-r-notebook-data-frame-types"><th></th>',
+    base::paste0(
+      "<th>&lt;",
+      base::vapply(value, r_notebook_data_frame_type, base::character(1L)),
+      "&gt;</th>",
+      collapse = ""
+    )
+  )
+  table_parts <- base::append(table_parts, type_row, after = 1L)
+  if (omitted_count > 0L) {
+    separator <- base::paste0(
+      '\n  <tr class="vsc-r-notebook-data-frame-break">',
+      '<td><span>-</span><span>-</span><span>-</span></td>',
+      base::paste0(base::rep("<td></td>", column_count), collapse = "")
+    )
+    table <- base::paste(base::append(
+      table_parts,
+      separator,
+      after = edge_count + 2L
+    ), collapse = "</tr>")
+  } else {
+    table <- base::paste(table_parts, collapse = "</tr>")
+  }
+  knitr::asis_output(base::paste0(
+    "<style data-vsc-r-notebook-data-frame-theme>",
+    ".vsc-r-notebook-data-frame{display:inline-block;max-width:100%;vertical-align:top}",
+    ".vsc-r-notebook-data-frame-scroll{max-width:100%;max-height:28rem;overflow:auto}",
+    ".vsc-r-notebook-data-frame table{border-collapse:collapse;width:auto!important;",
+    "min-width:0!important;font-variant-numeric:tabular-nums}",
+    ".vsc-r-notebook-data-frame th,.vsc-r-notebook-data-frame td{padding:.2rem .5rem;",
+    "white-space:nowrap;border:1px solid var(--vscode-panel-border,rgba(128,128,128,.35))}",
+    ".vsc-r-notebook-data-frame thead th{position:sticky;top:0;z-index:1;",
+    "background:var(--vscode-editor-background)}",
+    ".vsc-r-notebook-data-frame-types th{top:1.65rem!important;color:",
+    "var(--vscode-descriptionForeground);font-size:.85em;font-weight:400}",
+    ".vsc-r-notebook-data-frame-break td:first-child{text-align:center;color:",
+    "var(--vscode-descriptionForeground);font-weight:600}",
+    ".vsc-r-notebook-data-frame-summary{margin-top:.25rem;",
+    "color:var(--vscode-descriptionForeground);font-size:.9em}</style>",
+    "<div class=\"vsc-r-notebook-data-frame\">",
+    "<div class=\"vsc-r-notebook-data-frame-scroll\">",
+    table,
+    "</div>",
+    "<div class=\"vsc-r-notebook-data-frame-summary\">",
+    summary,
+    "</div></div>"
+  ))
+}
+
+r_notebook_compact_data_frame_source <- function(source) {
+  expressions <- tryCatch(
+    base::parse(text = base::paste(source, collapse = "\n")),
+    error = function(...) NULL
+  )
+  if (base::length(expressions) != 1L) {
+    return(TRUE)
+  }
+  expression <- expressions[[1L]]
+  while (
+    base::is.call(expression) &&
+      base::is.symbol(expression[[1L]]) &&
+      base::as.character(expression[[1L]]) %in% c("(", "%>%")
+  ) {
+    expression <- expression[[if (
+      base::identical(expression[[1L]], base::as.name("("))
+    ) 2L else 3L]]
+  }
+  if (!base::is.call(expression)) {
+    return(TRUE)
+  }
+  target <- expression[[1L]]
+  function_name <- if (base::is.symbol(target)) {
+    base::as.character(target)
+  } else if (
+    base::is.call(target) &&
+      base::as.character(target[[1L]]) %in% c("::", ":::")
+  ) {
+    base::as.character(target[[3L]])
+  } else {
+    ""
+  }
+  !function_name %in% c("head", "tail")
+}
+
 r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) {
   previous_labels <- runtime$cell_labels[[cell_id]]
   if (base::is.null(previous_labels)) {
@@ -116,6 +272,20 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
     capture$called <- TRUE
     tryCatch({
       r_notebook_apply_session_state(runtime, execution_code)
+      render_context <- utils::getFromNamespace(
+        "render_context",
+        "rmarkdown"
+      )()
+      render_state <- base::new.env(parent = base::emptyenv())
+      render_state$compact_data_frame <- TRUE
+      if (base::is.environment(render_context)) {
+        render_context$df_print <- function(value) {
+          r_notebook_compact_data_frame(
+            value,
+            compact = render_state$compact_data_frame
+          )
+        }
+      }
       previous_evaluate <- knitr::knit_hooks$get("evaluate")
       previous_chunk <- knitr::knit_hooks$get("chunk")
       previous_source <- knitr::knit_hooks$get("source")
@@ -133,7 +303,22 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
           known_labels,
           generated_labels$values
         ), add = TRUE)
-        previous_evaluate(...)
+        arguments <- list(...)
+        render_state$compact_data_frame <- TRUE
+        output_handler <- arguments$output_handler
+        if (
+          base::inherits(output_handler, "output_handler") &&
+            base::is.function(output_handler$source)
+        ) {
+          previous_source_handler <- output_handler$source
+          output_handler$source <- function(source) {
+            render_state$compact_data_frame <-
+              r_notebook_compact_data_frame_source(source)
+            previous_source_handler(source)
+          }
+          arguments$output_handler <- output_handler
+        }
+        base::do.call(previous_evaluate, arguments)
       }
       chunk_wrapper <- function(output, options) {
         base::on.exit(r_notebook_capture_session_state(
@@ -950,6 +1135,27 @@ r_notebook_execute <- function(
     }
     if (utils::packageVersion("knitr") < "1.44") {
       base::stop("Native R Markdown and Quarto cell options require knitr 1.44 or newer.")
+    }
+
+    if (
+      base::identical(
+        base::Sys.getenv("VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION"),
+        "0"
+      ) &&
+        !base::exists("View", envir = evaluation_env, inherits = FALSE)
+    ) {
+      inline_view <- function(x, title = base::deparse(base::substitute(x))) x
+      base::assign("View", inline_view, envir = evaluation_env)
+      base::on.exit({
+        current_view <- base::get0(
+          "View",
+          envir = evaluation_env,
+          inherits = FALSE
+        )
+        if (base::identical(current_view, inline_view)) {
+          base::rm("View", envir = evaluation_env)
+        }
+      }, add = TRUE)
     }
 
     runtime <- r_notebook_initialize_runtime(document_path)

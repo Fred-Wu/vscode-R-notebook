@@ -4,6 +4,7 @@ All notable changes to R Notebook for VS Code will be documented in this file.
 
 ## Unreleased
 
+- Rendered data frames, data.tables, and tibbles as consistent static inline tables with column types, showing the first and last ten rows with an index-column separator for large data sets. The same preview is used by `View()` when R Extension Integration is disabled, while explicit `head(df, n)` and `tail(df, n)` results show all requested rows in the same table style.
 - Fixed automatic vscode-R session attachment for notebook R processes on Windows.
 - Disabled unused RStudio API emulation in inline notebook R sessions.
 - Made the vscode-R session watcher optional for inline code and rendering.

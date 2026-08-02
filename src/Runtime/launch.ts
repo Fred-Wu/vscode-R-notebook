@@ -97,6 +97,9 @@ async function launchOptions(
   delete env.VSCODE_INIT_R;
   delete env.VSCODE_WATCHER_DIR;
   env.TERM_PROGRAM = "vscode";
+  env.VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = sessionIntegrationEnabled
+    ? "1"
+    : "0";
 
   let initialization: HiddenRLaunchOptions["initialization"];
   if (sessionIntegrationEnabled) {

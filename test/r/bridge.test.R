@@ -214,6 +214,256 @@ rmd_default_plot_pngs <- cell_execution_files(
 )
 stopifnot(length(rmd_default_plot_pngs) == 1L)
 
+rmd_compact_data_frame_dir <- run_chunk(
+  "rmd-compact-data-frame",
+  rmd_document,
+  c(
+    "```{r, echo=FALSE}",
+    "compact_rmd_value <- data.frame(",
+    "  marker = sprintf('RMD-ROW-%03d', 1:120),",
+    "  unsafe = rep('<RMD & value>', 120)",
+    ")",
+    "compact_rmd_value",
+    "```"
+  )
+)
+rmd_compact_data_frame_html <- output_payload(rmd_compact_data_frame_dir)
+stopifnot(grepl(
+  "class=\"vsc-r-notebook-data-frame\"",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "data-vsc-r-notebook-data-frame-theme",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl("RMD-ROW-010", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(!grepl("RMD-ROW-011", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(!grepl("RMD-ROW-051", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(!grepl("RMD-ROW-070", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(grepl("RMD-ROW-111", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(grepl("RMD-ROW-120", rmd_compact_data_frame_html, fixed = TRUE))
+stopifnot(grepl(
+  ">[[:space:]]*111[[:space:]]*</td>",
+  rmd_compact_data_frame_html,
+  perl = TRUE
+))
+stopifnot(!grepl(
+  ">[[:space:]]*11[[:space:]]*</td>",
+  rmd_compact_data_frame_html,
+  perl = TRUE
+))
+stopifnot(grepl(
+  "100 rows omitted",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "vsc-r-notebook-data-frame-types",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "&lt;char&gt;",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "vsc-r-notebook-data-frame-break",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  paste0(
+    '<tr class="vsc-r-notebook-data-frame-break">[[:space:]]*',
+    '<td>[[:space:]]*<span>-</span><span>-</span><span>-</span>',
+    '[[:space:]]*</td>[[:space:]]*',
+    '<td>[[:space:]]*</td>[[:space:]]*',
+    '<td>[[:space:]]*</td>'
+  ),
+  rmd_compact_data_frame_html,
+  perl = TRUE
+))
+stopifnot(!grepl(
+  "vsc-r-notebook-data-frame-break\"><td colspan",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "width:auto!important;min-width:0!important",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(!grepl(
+  "min-width:100%",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "120 rows × 2 columns",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "&lt;RMD &amp; value&gt;",
+  rmd_compact_data_frame_html,
+  fixed = TRUE
+))
+stopifnot(!grepl("<RMD & value>", rmd_compact_data_frame_html, fixed = TRUE))
+
+stopifnot(r_notebook_compact_data_frame_source("df"))
+stopifnot(r_notebook_compact_data_frame_source("(df)"))
+stopifnot(r_notebook_compact_data_frame_source("View(df)"))
+stopifnot(!r_notebook_compact_data_frame_source("head(df, 20)"))
+stopifnot(!r_notebook_compact_data_frame_source("tail(df, 20)"))
+stopifnot(!r_notebook_compact_data_frame_source("utils::head(df, 20)"))
+stopifnot(!r_notebook_compact_data_frame_source("df %>% head(20)"))
+stopifnot(r_notebook_compact_data_frame_source("transform(df, y = 1)"))
+stopifnot(r_notebook_compact_data_frame_source("invalid("))
+
+rmd_explicit_data_frame_rows_dir <- run_chunk(
+  "rmd-explicit-data-frame-rows",
+  rmd_document,
+  c(
+    "```{r, echo=FALSE}",
+    "explicit_rows <- data.frame(",
+    "  head_marker = sprintf('HEAD-ROW-%03d', 1:40),",
+    "  tail_marker = sprintf('TAIL-ROW-%03d', 1:40)",
+    ")",
+    "head(explicit_rows, 30)",
+    "tail(explicit_rows, 30)",
+    "```"
+  )
+)
+rmd_explicit_data_frame_rows_html <- output_payload(
+  rmd_explicit_data_frame_rows_dir
+)
+stopifnot(grepl(
+  "class=\"vsc-r-notebook-data-frame\"",
+  rmd_explicit_data_frame_rows_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "HEAD-ROW-011",
+  rmd_explicit_data_frame_rows_html,
+  fixed = TRUE
+))
+stopifnot(grepl(
+  "TAIL-ROW-021",
+  rmd_explicit_data_frame_rows_html,
+  fixed = TRUE
+))
+stopifnot(!grepl(
+  '<tr class="vsc-r-notebook-data-frame-break">',
+  rmd_explicit_data_frame_rows_html,
+  fixed = TRUE
+))
+
+stopifnot(identical(
+  base::unname(base::vapply(
+    list(
+      integer = 1L,
+      numeric = 1.5,
+      character = "a",
+      logical = TRUE,
+      factor = factor("a"),
+      ordered = ordered("a"),
+      date = as.Date("2020-01-01"),
+      idate = structure(1L, class = c("IDate", "Date")),
+      integer64 = structure(1, class = "integer64"),
+      expression = expression(x)
+    ),
+    r_notebook_data_frame_type,
+    character(1L)
+  )),
+  c(
+    "int", "num", "char", "lgcl", "fctr", "ord", "Date", "IDat", "i64",
+    "expr"
+  )
+))
+
+rmd_tabular_classes_dir <- run_chunk(
+  "rmd-tabular-classes",
+  rmd_document,
+  c(
+    "```{r, echo=FALSE}",
+    "styled_data_table <- data.frame(",
+    "  marker = sprintf('DT-ROW-%03d', 1:40), value = 1:40",
+    ")",
+    "if (requireNamespace('data.table', quietly = TRUE)) {",
+    "  data.table::setDT(styled_data_table)",
+    "} else class(styled_data_table) <- c('data.table', 'data.frame')",
+    "styled_tibble <- data.frame(",
+    "  marker = sprintf('TBL-ROW-%03d', 1:40), value = 1:40",
+    ")",
+    "if (requireNamespace('dplyr', quietly = TRUE)) {",
+    "  styled_tibble <- dplyr::as_tibble(styled_tibble)",
+    "} else class(styled_tibble) <- c('tbl_df', 'tbl', 'data.frame')",
+    "styled_data_table",
+    "styled_tibble",
+    "```"
+  )
+)
+rmd_tabular_classes_html <- output_payload(rmd_tabular_classes_dir)
+for (marker in c(
+  "DT-ROW-010",
+  "DT-ROW-031",
+  "TBL-ROW-010",
+  "TBL-ROW-031"
+)) {
+  stopifnot(grepl(marker, rmd_tabular_classes_html, fixed = TRUE))
+}
+stopifnot(!grepl("DT-ROW-011", rmd_tabular_classes_html, fixed = TRUE))
+stopifnot(!grepl("TBL-ROW-011", rmd_tabular_classes_html, fixed = TRUE))
+stopifnot(lengths(regmatches(
+  rmd_tabular_classes_html,
+  gregexpr(
+    'class="vsc-r-notebook-data-frame"',
+    rmd_tabular_classes_html,
+    fixed = TRUE
+  )
+)) == 2L)
+
+previous_integration_flag <- base::Sys.getenv(
+  "VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION",
+  unset = NA_character_
+)
+base::Sys.setenv(VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = "0")
+rmd_inline_view_dir <- run_chunk(
+  "rmd-inline-view",
+  rmd_document,
+  c(
+    "```{r, echo=FALSE}",
+    "fallback_view_value <- data.frame(",
+    "  marker = sprintf('VIEW-ROW-%03d', 1:40),",
+    "  value = 1:40",
+    ")",
+    "View(fallback_view_value)",
+    "```"
+  )
+)
+if (base::is.na(previous_integration_flag)) {
+  base::Sys.unsetenv("VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION")
+} else {
+  base::Sys.setenv(
+    VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = previous_integration_flag
+  )
+}
+rmd_inline_view_html <- output_payload(rmd_inline_view_dir)
+stopifnot(grepl(
+  "class=\"vsc-r-notebook-data-frame\"",
+  rmd_inline_view_html,
+  fixed = TRUE
+))
+stopifnot(grepl("VIEW-ROW-010", rmd_inline_view_html, fixed = TRUE))
+stopifnot(!grepl("VIEW-ROW-011", rmd_inline_view_html, fixed = TRUE))
+stopifnot(grepl("VIEW-ROW-031", rmd_inline_view_html, fixed = TRUE))
+stopifnot(grepl("VIEW-ROW-040", rmd_inline_view_html, fixed = TRUE))
+stopifnot(grepl("20 rows omitted", rmd_inline_view_html, fixed = TRUE))
+stopifnot(grepl("&lt;int&gt;", rmd_inline_view_html, fixed = TRUE))
+stopifnot(!base::exists("View", envir = .GlobalEnv, inherits = FALSE))
+
 knit_engines_before_execution <- knitr::knit_engines$get()
 inline_renderer_before_execution <- function(value) value
 assign(
@@ -242,6 +492,11 @@ basic_html <- output_payload(basic_dir)
 stopifnot(grepl("inline text", basic_html, fixed = TRUE))
 stopifnot(grepl("inline warning", basic_html, fixed = TRUE))
 stopifnot(grepl("one", basic_html, fixed = TRUE))
+stopifnot(grepl(
+  "class=\"vsc-r-notebook-data-frame\"",
+  basic_html,
+  fixed = TRUE
+))
 stopifnot(grepl("data:image/png;base64", basic_html, fixed = TRUE))
 stopifnot(grepl(
   "--vsc-r-notebook-plot-width:4in",
