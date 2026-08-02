@@ -247,6 +247,12 @@ export class RExecutionBridge {
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
+    let interruptCompletion: Promise<void> | undefined;
+    let reportInterruptFailure!: (reason?: unknown) => void;
+    const interruptFailure = new Promise<never>((_resolve, reject) => {
+      reportInterruptFailure = reject;
+    });
+    void interruptFailure.catch(() => undefined);
     try {
       await fsPromises.writeFile(chunkPath, chunkSource, "utf8");
       const documentSource = context?.documentSource
@@ -306,14 +312,16 @@ export class RExecutionBridge {
           return;
         }
         cancelled = true;
-        this.transport.interrupt();
+        interruptCompletion = this.transport.interrupt();
+        void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token.onCancellationRequested(interrupt);
       if (token.isCancellationRequested) {
         interrupt();
       }
-      await Promise.race([completion.promise, dispatch.failure]);
+      await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
       if (cancelled) {
+        await interruptCompletion;
         return { success: false, outputs: [] };
       }
       return await readResult(requestDirectory);
@@ -340,6 +348,12 @@ export class RExecutionBridge {
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
+    let interruptCompletion: Promise<void> | undefined;
+    let reportInterruptFailure!: (reason?: unknown) => void;
+    const interruptFailure = new Promise<never>((_resolve, reject) => {
+      reportInterruptFailure = reject;
+    });
+    void interruptFailure.catch(() => undefined);
     try {
       const snapshotPath = await snapshotDocument(
         requestDirectory,
@@ -379,14 +393,16 @@ export class RExecutionBridge {
           return;
         }
         cancelled = true;
-        this.transport.interrupt();
+        interruptCompletion = this.transport.interrupt();
+        void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token?.onCancellationRequested(interrupt);
       if (token?.isCancellationRequested) {
         interrupt();
       }
-      await Promise.race([completion.promise, dispatch.failure]);
+      await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
       if (cancelled) {
+        await interruptCompletion;
         throw new TextRenderCancelledError();
       }
       return await readTextResult(requestDirectory);

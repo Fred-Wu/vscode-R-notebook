@@ -1,7 +1,11 @@
 import {
+  execFile,
   spawn,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface InlineDispatch {
   failure: Promise<never>;
@@ -10,7 +14,7 @@ export interface InlineDispatch {
 
 export interface InlineRTransport {
   send(command: string): Promise<InlineDispatch>;
-  interrupt(): void;
+  interrupt(): Promise<void>;
 }
 
 export interface HiddenRLaunchOptions {
@@ -18,11 +22,54 @@ export interface HiddenRLaunchOptions {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  interrupt?: (processId: number) => Promise<void>;
   initialization?: {
     command: string;
     successMarker: string;
     failureMarker: string;
   };
+}
+
+async function interruptWindowsRProcess(
+  executable: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  processId: number
+): Promise<void> {
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    throw new Error("Cannot interrupt inline R: its process ID is invalid.");
+  }
+  const expression = [
+    "if (!base::requireNamespace('ps', quietly = TRUE))",
+    "base::stop(\"The R package 'ps' is required to cancel notebook execution on Windows. Install it with install.packages('ps').\", call. = FALSE);",
+    `ps::ps_interrupt(ps::ps_handle(${processId}))`,
+  ].join(" ");
+
+  try {
+    await execFileAsync(
+      executable,
+      [
+        "--quiet",
+        "--no-save",
+        "--no-restore",
+        "--slave",
+        "--no-site-file",
+        "--no-init-file",
+        "-e",
+        expression,
+      ],
+      {
+        cwd,
+        env,
+        timeout: 10_000,
+        windowsHide: true,
+      }
+    );
+  } catch (error) {
+    const result = error as Error & { stderr?: string };
+    const detail = result.stderr?.trim() || result.message;
+    throw new Error(`Could not interrupt the inline R process: ${detail}`);
+  }
 }
 
 function exitError(code: number | null, signal: NodeJS.Signals | null): Error {
@@ -42,6 +89,8 @@ function isRunning(child: ChildProcessWithoutNullStreams): boolean {
 export class HiddenRProcess implements InlineRTransport {
   private child: ChildProcessWithoutNullStreams | undefined;
   private starting: Promise<ChildProcessWithoutNullStreams> | undefined;
+  private currentInterruption: Promise<void> | undefined;
+  private currentLaunchOptions: HiddenRLaunchOptions | undefined;
   private currentInitialization: HiddenRLaunchOptions["initialization"] | undefined;
   private rProcessId: number | undefined;
   private ready = false;
@@ -68,6 +117,8 @@ export class HiddenRProcess implements InlineRTransport {
     if (this.child === child) {
       const wasRunning = this.ready;
       this.child = undefined;
+      this.currentInterruption = undefined;
+      this.currentLaunchOptions = undefined;
       this.currentInitialization = undefined;
       this.rProcessId = undefined;
       this.ready = false;
@@ -178,6 +229,7 @@ export class HiddenRProcess implements InlineRTransport {
       windowsHide: true,
     });
     this.child = child;
+    this.currentLaunchOptions = options;
 
     child.stdout.resume();
     child.stderr.on("data", (data: Buffer) => {
@@ -319,6 +371,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw exitError(child.exitCode, child.signalCode);
     }
+    this.currentInterruption = undefined;
 
     let rejectFailure: ((error: Error) => void) | undefined;
     let listening = true;
@@ -376,11 +429,48 @@ export class HiddenRProcess implements InlineRTransport {
     return { failure, dispose: stopListening };
   }
 
-  interrupt(): void {
-    const child = this.child;
-    if (child && isRunning(child)) {
-      child.kill("SIGINT");
+  private async interruptProcess(
+    child: ChildProcessWithoutNullStreams,
+    options: HiddenRLaunchOptions | undefined
+  ): Promise<void> {
+    if (options?.interrupt) {
+      const processId = child.pid;
+      if (processId === undefined) {
+        throw new Error("Cannot interrupt inline R: its process ID is unavailable.");
+      }
+      await options.interrupt(processId);
+      return;
     }
+    if (process.platform === "win32") {
+      const processId = child.pid;
+      if (!options || processId === undefined) {
+        throw new Error("Cannot interrupt inline R: its launch context is unavailable.");
+      }
+      await interruptWindowsRProcess(
+        options.executable,
+        options.cwd,
+        options.env,
+        processId
+      );
+      return;
+    }
+    if (!child.kill("SIGINT")) {
+      throw new Error("Could not send SIGINT to the inline R process.");
+    }
+  }
+
+  interrupt(): Promise<void> {
+    const child = this.child;
+    if (!child || !isRunning(child)) {
+      return Promise.resolve();
+    }
+    if (!this.currentInterruption) {
+      this.currentInterruption = this.interruptProcess(
+        child,
+        this.currentLaunchOptions
+      );
+    }
+    return this.currentInterruption;
   }
 
   dispose(): void {
@@ -391,6 +481,8 @@ export class HiddenRProcess implements InlineRTransport {
     const child = this.child;
     const wasRunning = this.ready;
     this.child = undefined;
+    this.currentInterruption = undefined;
+    this.currentLaunchOptions = undefined;
     this.currentInitialization = undefined;
     this.rProcessId = undefined;
     this.ready = false;

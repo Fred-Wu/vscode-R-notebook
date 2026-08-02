@@ -5,6 +5,7 @@ Open R Markdown (`.rmd`) and Quarto (`.qmd`) files as VS Code notebooks, render 
 ## Requirements
 
 - R with `knitr` 1.44 or newer and `rmarkdown`
+- The R package `ps` on Windows, used to cancel a running cell without ending its notebook session
 - `bookdown` when an R Markdown file selects a `bookdown::` output format
 - [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r)
 - [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console)

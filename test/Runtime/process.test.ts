@@ -139,12 +139,21 @@ test("interrupts work without replacing the hidden process", async (t) => {
   const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-interrupt-test-"));
   const markerPath = path.join(directory, "interrupted.txt");
   const resultPath = path.join(directory, "result.txt");
+  let interruptionCount = 0;
+  let interruptedProcessId: number | undefined;
   const hiddenProcess = new HiddenRProcess(
     async () => ({
       executable: process.execPath,
       args: ["-e", FAKE_R_PROCESS],
       cwd: directory,
       env: { ...process.env, INTERRUPT_MARKER: markerPath },
+      interrupt: process.platform === "win32"
+        ? async (processId) => {
+          interruptionCount += 1;
+          interruptedProcessId = processId;
+          await fsPromises.writeFile(markerPath, "interrupted");
+        }
+        : undefined,
       initialization: {
         command: "init",
         successMarker: "READY ",
@@ -164,8 +173,16 @@ test("interrupts work without replacing the hidden process", async (t) => {
   (await hiddenProcess.send("set preserved")).dispose();
 
   const interrupted = waitForFile(markerPath);
-  hiddenProcess.interrupt();
+  await Promise.all([
+    hiddenProcess.interrupt(),
+    hiddenProcess.interrupt(),
+    hiddenProcess.interrupt(),
+  ]);
   await interrupted;
+  if (process.platform === "win32") {
+    assert.equal(interruptedProcessId, processId);
+    assert.equal(interruptionCount, 1);
+  }
 
   const written = waitForFile(resultPath);
   const dispatch = await hiddenProcess.send(`write ${resultPath}`);
@@ -173,4 +190,13 @@ test("interrupts work without replacing the hidden process", async (t) => {
   dispatch.dispose();
   assert.equal(hiddenProcess.processId, processId);
   assert.equal(await fsPromises.readFile(resultPath, "utf8"), "preserved");
+
+  if (process.platform === "win32") {
+    await hiddenProcess.interrupt();
+    assert.equal(interruptionCount, 2);
+  }
+
+  const stopped = await hiddenProcess.send("exit");
+  await assert.rejects(stopped.failure, /exited with code 9/);
+  stopped.dispose();
 });
