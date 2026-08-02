@@ -31,36 +31,23 @@ export interface HiddenRLaunchOptions {
 }
 
 async function interruptWindowsRProcess(
-  executable: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
+  options: HiddenRLaunchOptions,
   processId: number
 ): Promise<void> {
-  if (!Number.isSafeInteger(processId) || processId <= 0) {
-    throw new Error("Cannot interrupt inline R: its process ID is invalid.");
-  }
-  const expression = [
-    "if (!base::requireNamespace('ps', quietly = TRUE))",
-    "base::stop(\"The R package 'ps' is required to cancel notebook execution on Windows. Install it with install.packages('ps').\", call. = FALSE);",
-    `ps::ps_interrupt(ps::ps_handle(${processId}))`,
-  ].join(" ");
-
   try {
     await execFileAsync(
-      executable,
+      options.executable,
       [
-        "--quiet",
-        "--no-save",
-        "--no-restore",
         "--slave",
         "--no-site-file",
         "--no-init-file",
         "-e",
-        expression,
+        "if (!requireNamespace('ps', quietly = TRUE)) stop(\"The R package 'ps' is required to cancel notebook execution on Windows.\"); "
+          + `ps::ps_interrupt(ps::ps_handle(${processId}))`,
       ],
       {
-        cwd,
-        env,
+        cwd: options.cwd,
+        env: options.env,
         timeout: 10_000,
         windowsHide: true,
       }
@@ -429,45 +416,28 @@ export class HiddenRProcess implements InlineRTransport {
     return { failure, dispose: stopListening };
   }
 
-  private async interruptProcess(
-    child: ChildProcessWithoutNullStreams,
-    options: HiddenRLaunchOptions | undefined
-  ): Promise<void> {
-    if (options?.interrupt) {
-      const processId = child.pid;
-      if (processId === undefined) {
-        throw new Error("Cannot interrupt inline R: its process ID is unavailable.");
-      }
-      await options.interrupt(processId);
-      return;
-    }
-    if (process.platform === "win32") {
-      const processId = child.pid;
-      if (!options || processId === undefined) {
-        throw new Error("Cannot interrupt inline R: its launch context is unavailable.");
-      }
-      await interruptWindowsRProcess(
-        options.executable,
-        options.cwd,
-        options.env,
-        processId
-      );
-      return;
-    }
-    if (!child.kill("SIGINT")) {
-      throw new Error("Could not send SIGINT to the inline R process.");
-    }
-  }
-
   interrupt(): Promise<void> {
     const child = this.child;
     if (!child || !isRunning(child)) {
       return Promise.resolve();
     }
-    if (!this.currentInterruption) {
-      this.currentInterruption = this.interruptProcess(
-        child,
-        this.currentLaunchOptions
+    if (this.currentInterruption) {
+      return this.currentInterruption;
+    }
+    const options = this.currentLaunchOptions;
+    const processId = child.pid;
+    if (!options || processId === undefined) {
+      return Promise.reject(new Error("Cannot interrupt inline R: its launch context is unavailable."));
+    }
+    if (options.interrupt) {
+      this.currentInterruption = options.interrupt(processId);
+    } else if (process.platform === "win32") {
+      this.currentInterruption = interruptWindowsRProcess(options, processId);
+    } else if (child.kill("SIGINT")) {
+      this.currentInterruption = Promise.resolve();
+    } else {
+      this.currentInterruption = Promise.reject(
+        new Error("Could not send SIGINT to the inline R process.")
       );
     }
     return this.currentInterruption;

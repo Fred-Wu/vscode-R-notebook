@@ -1107,6 +1107,40 @@ project_filter_html <- output_payload(project_filter_dir)
 stopifnot(grepl("after-project-filter", project_filter_html, fixed = TRUE))
 stopifnot(!grepl("before-project-filter", project_filter_html, fixed = TRUE))
 
+writeLines(c(
+  "function CodeBlock(block)",
+  "  block.text = string.gsub(block.text, 'before%-project%-filter', 'after-updated-notebook-filter')",
+  "  return block",
+  "end"
+), file.path(project_dir, "updated-notebook-filter.lua"))
+writeLines(c(
+  "project:",
+  "  type: default",
+  "format: html",
+  "filters: [updated-notebook-filter.lua]"
+), file.path(project_dir, "_quarto.yml"))
+updated_notebook_filter_dir <- run_chunk(
+  "updated-notebook-filter",
+  project_filter_document,
+  c(
+    "```{r}",
+    "#| echo: false",
+    "cat('before-project-filter')",
+    "```"
+  )
+)
+updated_notebook_filter_html <- output_payload(updated_notebook_filter_dir)
+stopifnot(grepl(
+  "after-updated-notebook-filter",
+  updated_notebook_filter_html,
+  fixed = TRUE
+))
+stopifnot(!grepl(
+  "after-project-filter",
+  updated_notebook_filter_html,
+  fixed = TRUE
+))
+
 rmd_filter_document <- file.path(test_root, "filter.Rmd")
 writeLines(c(
   "---",

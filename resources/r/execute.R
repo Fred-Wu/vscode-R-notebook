@@ -420,6 +420,38 @@ r_notebook_quarto_executable <- function(configured) {
   base::unname(quarto)
 }
 
+r_notebook_quarto_configuration <- function(document_path) {
+  directory <- base::normalizePath(
+    base::dirname(document_path),
+    mustWork = FALSE
+  )
+  repeat {
+    candidates <- base::file.path(
+      directory,
+      c("_quarto.yml", "_quarto.yaml")
+    )
+    configuration_files <- candidates[base::file.exists(candidates)]
+    if (base::length(configuration_files) > 0L) {
+      return(base::lapply(configuration_files, function(configuration_file) {
+        list(
+          path = base::normalizePath(configuration_file, mustWork = FALSE),
+          content = base::readLines(
+            configuration_file,
+            warn = FALSE,
+            encoding = "UTF-8"
+          )
+        )
+      }))
+    }
+
+    parent <- base::normalizePath(base::dirname(directory), mustWork = FALSE)
+    if (base::identical(parent, directory)) {
+      return(list())
+    }
+    directory <- parent
+  }
+}
+
 r_notebook_quarto_context <- function(
   runtime,
   document_path,
@@ -463,6 +495,7 @@ r_notebook_quarto_context <- function(
     runtime$quarto_pandoc_configured <- FALSE
     runtime$quarto_front_matter <- NULL
     runtime$quarto_document_directory <- NULL
+    runtime$quarto_configuration <- NULL
     runtime$quarto_context <- NULL
     runtime$quarto_environment <- base::new.env(parent = base::globalenv())
     for (support_file in c("patch.R", "execute.R", "hooks.R")) {
@@ -481,9 +514,11 @@ r_notebook_quarto_context <- function(
     base::dirname(document_path),
     mustWork = FALSE
   )
+  configuration <- r_notebook_quarto_configuration(document_path)
   if (
     base::identical(runtime$quarto_front_matter, front_matter) &&
       base::identical(runtime$quarto_document_directory, document_directory) &&
+      base::identical(runtime$quarto_configuration, configuration) &&
       !base::is.null(runtime$quarto_context)
   ) {
     return(runtime$quarto_context)
@@ -519,6 +554,7 @@ r_notebook_quarto_context <- function(
   )
   runtime$quarto_front_matter <- front_matter
   runtime$quarto_document_directory <- document_directory
+  runtime$quarto_configuration <- configuration
   runtime$quarto_context <- context
   context
 }
