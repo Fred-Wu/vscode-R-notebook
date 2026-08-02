@@ -26,6 +26,7 @@ import {
 } from "../Runtime/launch";
 import type { RConsoleTransport } from "../Runtime/console";
 import type { VscodeRSessionRequest } from "../Runtime/vscodeR";
+import { isQuartoNotebook } from "../notebookFile";
 
 interface NotebookSession {
   uri: vscode.Uri;
@@ -390,7 +391,7 @@ export class RNotebookController implements vscode.Disposable {
       context.cells,
       context.markupIds,
       context.eol,
-      notebook.uri.path.toLowerCase().endsWith(".qmd")
+      isQuartoNotebook(notebook.uri.fsPath)
         ? "quarto"
         : "rMarkdown"
     );

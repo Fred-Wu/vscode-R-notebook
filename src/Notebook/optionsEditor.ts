@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import * as path from "node:path";
 import * as vscode from "vscode";
+import { isQuartoNotebook } from "../notebookFile";
 import type { RNotebookCellMetadata } from "./document";
 import type { MergedCellOptions } from "./optionMerge";
 import type { CellOptionCompletions } from "./optionSchema";
@@ -64,7 +64,7 @@ export class CellOptionsEditor implements vscode.Disposable {
     }
     const fields = chunkHeaderFields(header, chunk.engine);
     const quartoFields = quartoOptionFields(cell.document.getText());
-    const documentKind = path.extname(cell.notebook.uri.fsPath).toLowerCase() === ".qmd"
+    const documentKind = isQuartoNotebook(cell.notebook.uri.fsPath)
       ? "quarto"
       : "rMarkdown";
     const completions = await this.loadCompletions(
@@ -165,7 +165,7 @@ export class CellOptionsEditor implements vscode.Disposable {
       if (!chunk) {
         throw new Error("The target code cell is no longer available.");
       }
-      const rMarkdown = path.extname(formCell.notebook.uri.fsPath).toLowerCase() !== ".qmd";
+      const rMarkdown = !isQuartoNotebook(formCell.notebook.uri.fsPath);
       if (!rMarkdown && message.action !== "apply") {
         throw new Error("Quarto cells always use pipe options.");
       }

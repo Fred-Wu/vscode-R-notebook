@@ -1213,7 +1213,7 @@ r_notebook_execute <- function(
     extension <- base::tolower(tools::file_ext(document_path))
     execution_path <- base::file.path(
       execution_dir,
-      if (base::identical(extension, "qmd")) "cell.qmd" else "cell.Rmd"
+      if (base::identical(extension, "qmd")) "cell.qmd" else "cell.rmd"
     )
 
     front_matter <- r_notebook_front_matter(native_document_path)

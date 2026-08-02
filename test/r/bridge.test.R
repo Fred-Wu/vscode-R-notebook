@@ -57,7 +57,7 @@ run_chunk <- function(
   extension <- if (identical(tolower(tools::file_ext(document)), "qmd")) {
     ".qmd"
   } else {
-    ".Rmd"
+    ".rmd"
   }
   chunk_path <- file.path(output_dir, paste0("chunk", extension))
   writeLines(source, chunk_path, useBytes = TRUE)

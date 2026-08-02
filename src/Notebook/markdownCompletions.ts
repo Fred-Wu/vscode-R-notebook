@@ -23,6 +23,7 @@ import {
   type QuartoAttributeContext,
   type QuartoAttributeGroup,
 } from "./quartoAttributes";
+import { isQuartoNotebook } from "../notebookFile";
 
 interface QuartoCompletion {
   type?: "key" | "value";
@@ -227,7 +228,7 @@ export class RNotebookMarkdownCompletionProvider implements
   prepareQuarto(notebook: vscode.NotebookDocument): void {
     if (
       notebook.notebookType !== NOTEBOOK_TYPE ||
-      !notebook.uri.path.toLowerCase().endsWith(".qmd")
+      !isQuartoNotebook(notebook.uri.fsPath)
     ) {
       return;
     }
@@ -290,7 +291,7 @@ export class RNotebookMarkdownCompletionProvider implements
     return {
       notebook,
       cell,
-      isQuarto: notebook.uri.path.toLowerCase().endsWith(".qmd"),
+      isQuarto: isQuartoNotebook(notebook.uri.fsPath),
     };
   }
 

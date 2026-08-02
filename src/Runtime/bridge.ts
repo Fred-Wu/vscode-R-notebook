@@ -4,6 +4,7 @@ import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type * as vscode from "vscode";
+import { normalizeNotebookExtension } from "../notebookFile";
 import type { InlineDispatch, InlineRTransport } from "./process";
 
 export interface BridgeOutput {
@@ -237,9 +238,10 @@ export class RExecutionBridge {
     context?: BridgeCellContext
   ): Promise<BridgeResult> {
     const requestDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-"));
-    const documentExtension = path.extname(documentPath).toLowerCase() === ".qmd"
-      ? ".qmd"
-      : ".Rmd";
+    const documentExtension = normalizeNotebookExtension(documentPath);
+    if (!documentExtension) {
+      throw new Error("R notebook execution requires an .rmd or .qmd file.");
+    }
     const chunkPath = path.join(requestDirectory, `chunk${documentExtension}`);
     const requestPath = path.join(requestDirectory, "request.R");
     let nativeDocumentPath = documentPath;

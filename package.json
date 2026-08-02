@@ -82,7 +82,7 @@
         "displayName": "R Notebook Editor",
         "selector": [
           {
-            "filenamePattern": "*.{Rmd,rmd,qmd}"
+            "filenamePattern": "*.[rRqQ][mM][dD]"
           }
         ]
       }
@@ -212,7 +212,7 @@
       "explorer/context": [
         {
           "command": "r-notebook.openAsNotebook",
-          "when": "resourceExtname =~ /\\.(Rmd|rmd|qmd)$/",
+          "when": "resourceExtname =~ /\\.[rRqQ][mM][dD]$/",
           "group": "navigation@8"
         }
       ],

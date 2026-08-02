@@ -5,6 +5,7 @@ import {
 } from "js-yaml";
 import { sourceLines, type ChunkMetadata } from "./document";
 import type { OptionCompletion } from "./optionSchema";
+import { isQuartoNotebook } from "../notebookFile";
 
 export const CELL_OPTIONS_MIME = "application/vnd.r-notebook.cell-options+json";
 
@@ -366,7 +367,7 @@ export function rMarkdownStatusHeader(
   chunk: ChunkMetadata,
   source: string
 ): string | undefined {
-  if (/\.qmd$/i.test(notebookPath)) {
+  if (isQuartoNotebook(notebookPath)) {
     return undefined;
   }
   const header = chunkHeader(chunk.openingFence);

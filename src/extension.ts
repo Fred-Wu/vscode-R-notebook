@@ -27,6 +27,10 @@ import {
   isVscodeRWorkingDirectoryAccepted,
   VscodeRSessionRequestWatcher,
 } from "./Runtime/vscodeR";
+import {
+  isQuartoNotebook,
+  normalizeNotebookExtension,
+} from "./notebookFile";
 
 const stateSaves = new Map<string, Promise<void>>();
 
@@ -120,7 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
     .get<boolean>("saveState", true);
   const textEditorDocuments = new Set<string>();
   const isNativeSource = (uri: vscode.Uri): boolean =>
-    uri.scheme === "file" && /\.(?:qmd|rmd)$/i.test(uri.fsPath);
+    uri.scheme === "file" && normalizeNotebookExtension(uri.fsPath) !== undefined;
   const sourceEditorUri = (input: unknown): vscode.Uri | undefined => {
     const uri = input instanceof vscode.TabInputText ||
         input instanceof vscode.TabInputCustom
@@ -545,7 +549,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (notebook.notebookType !== NOTEBOOK_TYPE) {
         return;
       }
-      if (!/\.qmd$/i.test(notebook.uri.fsPath)) {
+      if (!isQuartoNotebook(notebook.uri.fsPath)) {
         const labelEdits = cellChanges.flatMap(({ cell, document }) => {
           const chunk = (cell.metadata as RNotebookCellMetadata).rNotebook;
           const nextChunk = document && chunk

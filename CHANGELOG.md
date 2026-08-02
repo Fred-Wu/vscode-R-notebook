@@ -1,27 +1,17 @@
 # Changelog
 
-All notable changes to R Notebook for VS Code will be documented in this file.
+## [0.2.0] - 2026-08-02
 
-## Unreleased
-
-- Refreshed running Quarto notebook execution after external `_quarto.yml` or `_quarto.yaml` changes.
-- Kept the hidden R session alive when cancelling notebook execution on Windows by using the R `ps` package and coalescing repeated interrupt requests for the same command.
-- Rendered data frames, data.tables, and tibbles as consistent static inline tables with column types, showing the first and last ten rows with an index-column separator for large data sets. The same preview is used by `View()` when R Extension Integration is disabled, while explicit `head(df, n)` and `tail(df, n)` results show all requested rows in the same table style.
-- Fixed automatic vscode-R session attachment for notebook R processes on Windows.
-- Disabled unused RStudio API emulation in inline notebook R sessions.
-- Made the vscode-R session watcher optional for inline code and rendering.
-- Started the hidden notebook R process automatically, independently of vscode-R integration.
-- Added an R Extension Integration checkbox for inline notebook R processes.
-- Renamed Restart R Session to Restart R and removed the manual start command.
-- Replaced built-in notebook suggestion lists with suggestions based on installed tools and notebook contents.
-- Added suggestions while typing in Quarto YAML headers without interrupting Markdown writing.
-- Kept R Markdown cell-option suggestions out of Quarto notebooks.
-- Kept R Markdown header and pipe options unless they are explicitly merged.
-- Fixed R Markdown figure reference links so they jump to the matching plot output.
-- Fixed R Markdown cell execution so it uses R Markdown directly and does not require Quarto.
-- Kept R Markdown cell-option suggestions available without Quarto.
-- Fixed Shutdown and Close so it closes every open tab for the notebook.
+- Run R code in a separate inline session for each notebook and view results, plots, and table previews below cells.
+- Display Markdown cells with the minimal document rendering needed for interactive notebook work.
+- Start notebook R sessions automatically and retain them temporarily after a notebook closes.
+- Restart, shut down, or reopen a running notebook session from VS Code.
+- Edit R Markdown and Quarto cell labels and options from the cell toolbar.
+- Get suggestions based on installed R and Quarto tools and the current notebook.
+- Send notebook code cells to R Console for interactive execution.
+- Save and restore notebook output with an optional `.r-notebook` sidecar file.
+- Connect the active notebook session to vscode-R workspace, data, help, and object viewers.
 
 ## [0.1.0] - 2026-07-23
 
-- Initial Release
+- Initial release.
