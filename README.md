@@ -97,6 +97,10 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - `ps` on Windows — Interrupts a cell without stopping its session.
 - `bookdown` when required — Supports `bookdown::` R Markdown formats.
 
+## Development Note
+
+This extension's source code was written with assistance from GPT models using OpenAI's Codex. The overall feature design and logic decisions are mine; GPT models were used to generate and iterate on the implementation.
+
 ## License
 
 - MIT

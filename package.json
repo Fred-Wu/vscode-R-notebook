@@ -2,7 +2,7 @@
   "name": "vsc-r-notebook",
   "displayName": "R Notebook for VS Code",
   "description": "Open R Markdown and Quarto documents as VS Code notebooks with inline R results.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "RConsole",
   "license": "MIT",
   "icon": "images/RNotebook.png",
@@ -259,6 +259,7 @@
     "package:extension": "npm run check-types && node esbuild.js --production",
     "vscode:prepublish": "npm run package:extension",
     "package:vsix": "vsce package",
+    "package:pre-release": "vsce package --pre-release",
     "package": "npm run package:vsix"
   },
   "devDependencies": {

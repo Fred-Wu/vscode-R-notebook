@@ -1,5 +1,5 @@
 name: Release VSIX
-run-name: Release ${{ github.ref_name }}
+run-name: Release ${{ github.ref_name }} (${{ inputs.release_type || 'tag' }})
 
 on:
   push:
@@ -7,23 +7,123 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      publish_marketplace:
-        description: Publish the VSIX to the VS Code Marketplace
-        type: boolean
-        default: false
+      release_type:
+        description: Create a GitHub release or pre-release
+        type: choice
+        options:
+          - pre-release
+          - release
+        default: pre-release
+        required: true
       publish_open_vsx:
-        description: Publish the VSIX to the Open VSX Registry
+        description: Publish a release to the Open VSX Registry
         type: boolean
         default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+concurrency:
+  group: release-${{ github.event.inputs.release_type || github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_type: ${{ steps.release.outputs.release_type }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate release
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_RELEASE_TYPE: ${{ inputs.release_type }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          version="$(node -p "require('./package.json').version")"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version must use major.minor.patch without a SemVer pre-release suffix."
+            exit 1
+          fi
+
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            case "${REF_NAME}" in
+              "v${version}")
+                release_type="release"
+                prerelease="false"
+                ;;
+              "v${version}-pre")
+                release_type="pre-release"
+                prerelease="true"
+                ;;
+              *)
+                echo "::error::Tag ${REF_NAME} does not match package version ${version}. Use v${version} or v${version}-pre."
+                exit 1
+                ;;
+            esac
+            tag_name="${REF_NAME}"
+          else
+            if [[ "${REF_NAME}" != "${DEFAULT_BRANCH}" ]]; then
+              echo "::error::Run manual releases from the default branch (${DEFAULT_BRANCH}), not ${REF_NAME}."
+              exit 1
+            fi
+
+            release_type="${REQUESTED_RELEASE_TYPE}"
+            case "${release_type}" in
+              release)
+                prerelease="false"
+                tag_name="v${version}"
+                ;;
+              pre-release)
+                prerelease="true"
+                tag_name="v${version}-pre"
+                ;;
+              *)
+                echo "::error::Unknown release type: ${release_type}"
+                exit 1
+                ;;
+            esac
+
+            git fetch --force --tags --quiet
+            if git rev-parse --verify --quiet "refs/tags/${tag_name}^{commit}" >/dev/null; then
+              tag_sha="$(git rev-parse "refs/tags/${tag_name}^{commit}")"
+              if [[ "${tag_sha}" != "${WORKFLOW_SHA}" ]]; then
+                echo "::error::Existing tag ${tag_name} points to ${tag_sha}, not this workflow commit ${WORKFLOW_SHA}."
+                exit 1
+              fi
+            fi
+          fi
+
+          node scripts/extract-release-notes.js \
+            --version "${version}" \
+            --output "${RUNNER_TEMP}/release-notes-validation.md"
+
+          {
+            echo "version=${version}"
+            echo "tag_name=${tag_name}"
+            echo "release_type=${release_type}"
+            echo "prerelease=${prerelease}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Preparing ${release_type} ${tag_name}."
+
   package:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +132,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-
-      - name: Verify tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          node -e "const pkg=require('./package.json'); const tag=process.env.GITHUB_REF_NAME; const expected='v' + pkg.version; if(tag !== expected){throw new Error('Tag ' + tag + ' does not match package version ' + expected);}"
 
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
@@ -55,8 +150,13 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Package extension
+      - name: Package release extension
+        if: needs.prepare.outputs.prerelease != 'true'
         run: npm run package
+
+      - name: Package pre-release extension
+        if: needs.prepare.outputs.prerelease == 'true'
+        run: npm run package:pre-release
 
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
@@ -65,9 +165,10 @@ jobs:
           path: vsc-r-notebook-*.vsix
           if-no-files-found: error
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+  publish-github:
+    needs:
+      - prepare
+      - package
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,44 +186,25 @@ jobs:
           cd release-artifacts
           sha256sum *.vsix > SHA256SUMS.txt
 
-      - name: Extract release notes
+      - name: Extract release notes from changelog
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          extract_section() {
-            awk -v heading="$1" '
-              /^##[[:space:]]+/ {
-                current = $0
-                sub(/^##[[:space:]]+/, "", current)
-                sub(/[[:space:]]+-.*$/, "", current)
-                sub(/^\[/, "", current)
-                sub(/\]$/, "", current)
-                if (current == heading) {
-                  in_section = 1
-                  next
-                }
-                if (in_section) {
-                  exit
-                }
-              }
-              in_section { print }
-            ' CHANGELOG.md
-          }
-          extract_section "$version" > release-notes.md
-          if ! grep -q '[^[:space:]]' release-notes.md; then
-            extract_section "Unreleased" > release-notes.md
-          fi
-          if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "::error::CHANGELOG.md does not contain a section for ${version} or Unreleased."
-            exit 1
-          fi
-          printf '\nFull changelog: https://github.com/%s/blob/%s/CHANGELOG.md\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> release-notes.md
+          node scripts/extract-release-notes.js \
+            --version "${VERSION}" \
+            --output release-notes.md \
+            --changelog-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${TAG_NAME}/CHANGELOG.md"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          name: R Notebook for VS Code ${{ github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: R Notebook for VS Code ${{ needs.prepare.outputs.tag_name }}
           body_path: release-notes.md
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          make_latest: ${{ needs.prepare.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: |
             release-artifacts/*.vsix
             release-artifacts/SHA256SUMS.txt
@@ -130,9 +212,13 @@ jobs:
           overwrite_files: true
 
   publish-marketplace:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_marketplace)
-    needs: package
+    if: needs.prepare.outputs.prerelease != 'true'
+    needs:
+      - prepare
+      - package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -151,12 +237,18 @@ jobs:
           path: release-artifacts
 
       - name: Publish VS Code Marketplace
-        run: npx @vscode/vsce publish --pat ${{ secrets.VSCE_PAT }} --skip-duplicate --packagePath ./release-artifacts/*.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --pat "${VSCE_PAT}" --skip-duplicate --packagePath ./release-artifacts/*.vsix
 
   publish-open-vsx:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_open_vsx)
-    needs: package
+    if: needs.prepare.outputs.prerelease != 'true' && (github.event_name == 'push' || inputs.publish_open_vsx)
+    needs:
+      - prepare
+      - package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v4
