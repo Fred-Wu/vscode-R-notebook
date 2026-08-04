@@ -142,7 +142,7 @@ jobs:
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Install R test dependencies
-        run: Rscript -e "install.packages(c('knitr', 'rmarkdown', 'htmlwidgets', 'plotly', 'DT'))"
+        run: Rscript -e "install.packages(c('knitr', 'rmarkdown'))"
 
       - name: Install dependencies
         run: npm ci
