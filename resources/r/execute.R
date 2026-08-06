@@ -1048,7 +1048,10 @@ r_notebook_render_text <- function(
     if (base::identical(extension, "qmd")) {
       quarto <- r_notebook_quarto_executable(quarto_executable)
       base::setwd(base::dirname(native_document_path))
-      render_output <- base::suppressWarnings(base::system2(
+      quarto_html_path <- base::file.path(output_dir, "quarto-text.html")
+      quarto_error_path <- base::file.path(output_dir, "quarto-text-error.txt")
+      base::on.exit(base::unlink(c(quarto_html_path, quarto_error_path)), add = TRUE)
+      render_status <- base::suppressWarnings(base::system2(
         quarto,
         c(
           "render",
@@ -1062,16 +1065,28 @@ r_notebook_render_text <- function(
           "--metadata", "highlight-style:none",
           "--metadata", "html-math-method:mathml"
         ),
-        stdout = TRUE,
-        stderr = TRUE
+        stdout = quarto_html_path,
+        stderr = quarto_error_path
       ))
-      if (!r_notebook_system_succeeded(render_output)) {
+      render_errors <- if (base::file.exists(quarto_error_path)) {
+        base::readLines(quarto_error_path, warn = FALSE, encoding = "UTF-8")
+      } else {
+        base::character()
+      }
+      if (
+        !base::identical(base::as.integer(render_status), 0L) ||
+          !base::file.exists(quarto_html_path)
+      ) {
         base::stop(base::paste(c(
           "Quarto could not render the notebook text.",
-          render_output
+          render_errors
         ), collapse = "\n"))
       }
-      html <- base::paste(render_output, collapse = "\n")
+      html <- base::paste(base::readLines(
+        quarto_html_path,
+        warn = FALSE,
+        encoding = "UTF-8"
+      ), collapse = "\n")
     } else {
       rendered_path <- rmarkdown::render(
         input = native_document_path,

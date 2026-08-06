@@ -1,5 +1,6 @@
 import { serializeDocument, type ParsedCell } from "./document";
 import { codeCellRenderOptions, quartoOptionLines } from "./options";
+import { splitFrontMatter } from "../markdown";
 
 interface NativeTextCell {
   id: string;
@@ -23,21 +24,6 @@ export function nativeCodeOptionSignature(cells: readonly ParsedCell[]): string 
     : []
   );
   return JSON.stringify(options);
-}
-
-function splitFrontMatter(source: string): { frontMatter: string; body: string } {
-  const opening = /^(?:---)(?:\r\n|\n|\r)/.exec(source);
-  if (!opening) {
-    return { frontMatter: "", body: source };
-  }
-  const closing = /^(?:---|\.\.\.)(?:\r\n|\n|\r|$)/m.exec(
-    source.slice(opening[0].length)
-  );
-  if (!closing) {
-    return { frontMatter: "", body: source };
-  }
-  const end = opening[0].length + closing.index + closing[0].length;
-  return { frontMatter: source.slice(0, end), body: source.slice(end) };
 }
 
 function divFence(source: string): string {
@@ -117,20 +103,13 @@ export function nativeTextDocument(
       : /(?:\r\n|\n|\r)$/.test(split.frontMatter)
         ? eol
         : eol + eol;
-    const frontMatterToken = `VSC_R_NOTEBOOK_FRONT_MATTER_${key}`;
-    const frontMatter = split.frontMatter
-      ? frontMatterToken
-      : "";
-    if (split.frontMatter) {
-      replacements.push({ token: frontMatterToken, source: split.frontMatter });
-    }
     const nativeCell = { id, marker, token, source: split.body };
     nativeCells.push(nativeCell);
     replacements.push(nativeCell);
     return {
       ...cell,
       value: [
-        frontMatter,
+        split.frontMatter,
         separator,
         `${fence} {#${marker} .r-notebook-markdown-cell}`,
         eol,

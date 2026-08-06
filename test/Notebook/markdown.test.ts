@@ -61,10 +61,10 @@ test("builds a text-only native snapshot with cell boundaries", () => {
   );
 
   assert.equal(native.cells.length, 2);
-  assert.equal(native.replacements.length, 3);
+  assert.equal(native.replacements.length, 2);
   assert.equal(native.cells[0]?.source, "\r\n# Section {#sec-one}\r\n\r\n");
   assert.equal(native.cells[1]?.source, "\r\nSee @sec-one and `r value`.\r\n");
-  assert.match(native.source, /^VSC_R_NOTEBOOK_FRONT_MATTER_first\r\n/);
+  assert.match(native.source, /^---\r\ntitle: Native text\r\n---\r\n/);
   assert.match(native.source, /#r-notebook-markdown-first/);
   assert.match(native.source, /VSC_R_NOTEBOOK_MARKDOWN_second/);
   assert.match(native.source, /<!-- r-notebook-code-cell -->/);

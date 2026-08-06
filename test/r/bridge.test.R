@@ -92,3 +92,39 @@ stopifnot(identical(readLines(file.path(failed, "done")), "false"))
 failed_metadata <- readLines(file.path(failed, "000001.meta"), warn = FALSE)
 stopifnot("kind: error" %in% failed_metadata)
 stopifnot(grepl("expected bridge error", output_text(failed), fixed = TRUE))
+
+text_document <- file.path(test_root, "text.qmd")
+writeLines(c(
+  "---",
+  "title: \"Horizon\"",
+  "format: html",
+  "---",
+  "",
+  "::: {#r-notebook-markdown-title .r-notebook-markdown-cell}",
+  "VSC_R_NOTEBOOK_MARKDOWN_title",
+  ":::"
+), text_document, useBytes = TRUE)
+text_output <- file.path(test_root, "text-render")
+dir.create(text_output)
+text_cells <- file.path(text_output, "cells.json")
+writeLines(
+  '[{"token":"VSC_R_NOTEBOOK_MARKDOWN_title","source":"# Text"}]',
+  text_cells,
+  useBytes = TRUE
+)
+r_notebook_render_text(
+  cells_path = text_cells,
+  native_document_path = text_document,
+  output_dir = text_output,
+  working_dir = test_root,
+  evaluation_env = .GlobalEnv,
+  quarto_executable = ""
+)
+stopifnot(identical(readLines(file.path(text_output, "done")), "true"))
+text_html <- paste(readLines(
+  file.path(text_output, "result.html"),
+  warn = FALSE,
+  encoding = "UTF-8"
+), collapse = "\n")
+stopifnot(grepl("Horizon", text_html, fixed = TRUE))
+stopifnot(grepl("r-notebook-markdown-title", text_html, fixed = TRUE))

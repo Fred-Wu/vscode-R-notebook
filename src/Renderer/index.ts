@@ -3,6 +3,7 @@ import type {
   OutputItem,
   RendererApi,
 } from "vscode-notebook-renderer";
+import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -146,24 +147,6 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     response.cells.map((cell) => [encodeURIComponent(cell.id), cell])
   );
   const firstNativeCell = nativeDocument.querySelector(".r-notebook-markdown-cell");
-  const titleBlock = nativeDocument.getElementById("title-block-header") ??
-    nativeDocument.getElementById("header");
-  const titleNodes = titleBlock
-    ? [titleBlock]
-    : Array.from(nativeDocument.body.children).filter((element) => {
-        if (element === firstNativeCell) {
-          return false;
-        }
-        if (element.classList.contains("r-notebook-markdown-cell")) {
-          return false;
-        }
-        return firstNativeCell !== null &&
-          element.matches(".title, .subtitle, .author, .date") &&
-          Boolean(
-            firstNativeCell.compareDocumentPosition(element) &
-            Node.DOCUMENT_POSITION_PRECEDING
-          );
-      });
   const assetSignature = Array.from(
     nativeDocument.head.querySelectorAll("style, script"),
     (element) => element.outerHTML
@@ -184,10 +167,15 @@ async function applyResponse(response: RenderResponse): Promise<void> {
       if (!renderedCell) {
         continue;
       }
-      const cellTitle = renderedCell === firstNativeCell
-        ? titleNodes.map((node) => node.outerHTML).join("\n")
-        : "";
-      const signature = `${assetSignature}\n${cellTitle}\n${renderedCell.outerHTML}`;
+      const frontMatter = renderedCell === firstNativeCell
+        ? element.querySelector<HTMLElement>("[data-r-notebook-front-matter]")
+        : null;
+      const frontMatterSignature = frontMatter?.outerHTML ?? "";
+      const signature = [
+        assetSignature,
+        frontMatterSignature,
+        renderedCell.outerHTML,
+      ].join("\n");
       if (element !== placeholder && renderedSignatures.get(element) === signature) {
         element.removeAttribute("data-r-notebook-text-request");
         continue;
@@ -213,8 +201,8 @@ async function applyResponse(response: RenderResponse): Promise<void> {
       }
 
       const content: Node[] = [];
-      if (renderedCell === firstNativeCell) {
-        content.push(...titleNodes.map((node) => document.importNode(node, true)));
+      if (frontMatter) {
+        content.push(document.importNode(frontMatter, true));
       }
       content.push(
         ...Array.from(
@@ -308,7 +296,9 @@ export const activate: ActivationFunction = async (context) => {
   renderer.extendMarkdownIt((markdownIt) => {
     const render = markdownIt.render.bind(markdownIt);
     markdownIt.render = (source, environment) => {
-      const originalHtml = render(source, environment);
+      const split = splitFrontMatter(source);
+      const originalHtml = yamlFrontMatterHtml(split.frontMatter) +
+        render(split.body, environment);
       const id = markupId(environment?.outputItem);
       if (!id) {
         return originalHtml;
