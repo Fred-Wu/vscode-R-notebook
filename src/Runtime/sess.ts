@@ -103,7 +103,10 @@ export class InlineSessCoordinator implements vscode.Disposable {
 
   async select(process: HiddenRProcess | undefined): Promise<void> {
     this.preferred = process;
-    if (process) await this.activate(process);
+    if (process) {
+      this.suspended = false;
+      await this.activate(process);
+    }
   }
 
   beginExecution(_process: HiddenRProcess): void {}
