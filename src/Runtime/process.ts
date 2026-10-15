@@ -129,8 +129,11 @@ export class HiddenRProcess implements InlineRTransport {
     return new Promise((resolve, reject) => {
       let output = "";
       let settled = false;
+      const timeout = setTimeout(() => finish(undefined,
+        new Error("vscode-R sess attachment timed out.")), 5000);
 
       const stopListening = (): void => {
+        clearTimeout(timeout);
         child.stdout.off("data", onData);
         child.stdin.off("error", onInputError);
         child.off("error", onError);
@@ -151,7 +154,7 @@ export class HiddenRProcess implements InlineRTransport {
         }
       };
       const onData = (data: Buffer): void => {
-        output += data.toString("utf8");
+        output = (output + data.toString("utf8")).slice(-16384);
         const successStart = output.indexOf(initialization.successMarker);
         if (successStart >= 0) {
           const processIdStart = successStart + initialization.successMarker.length;
@@ -278,9 +281,7 @@ export class HiddenRProcess implements InlineRTransport {
       } catch (error) {
         options.initialization.preparation?.dispose();
         this.clearProcess(child);
-        if (isRunning(child)) {
-          child.kill();
-        }
+        if (isRunning(child)) child.kill();
         throw error;
       }
     }
