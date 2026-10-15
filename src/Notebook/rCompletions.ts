@@ -30,7 +30,7 @@ export class RNotebookCodeCompletionProvider implements vscode.CompletionItemPro
       }
       const source = document.getText();
       if (!this.shadow) {
-        this.shadow = vscode.workspace.openTextDocument({ language: "r", content: source })
+        this.shadow = Promise.resolve(vscode.workspace.openTextDocument({ language: "r", content: source }))
           .catch((error: unknown) => {
             this.shadow = undefined;
             throw error;
