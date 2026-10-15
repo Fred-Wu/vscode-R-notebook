@@ -24,10 +24,6 @@ import {
 import { TextRenderCancelledError } from "./Runtime/bridge";
 import { RConsoleTransport } from "./Runtime/console";
 import {
-  isVscodeRWorkingDirectoryAccepted,
-  VscodeRSessionRequestWatcher,
-} from "./Runtime/vscodeR";
-import {
   isQuartoNotebook,
   normalizeNotebookExtension,
 } from "./notebookFile";
@@ -201,40 +197,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const notebookRExtensionIntegrationEnabled = vscode.workspace
     .getConfiguration("r.notebook")
     .get<boolean>("rExtensionIntegration", true);
-  const sessionRequestWatcher = vscodeRSessionWatcherEnabled
-    ? new VscodeRSessionRequestWatcher(
-      async (request) => {
-        const workspaceDirectories = vscode.workspace.workspaceFolders?.map(
-          (folder) => folder.uri.fsPath
-        );
-        if (
-          isVscodeRWorkingDirectoryAccepted(
-            request.workingDirectory,
-            workspaceDirectories
-          )
-        ) {
-          await controller.handleVscodeRSessionRequest(request);
-          return true;
-        }
-        return false;
-      },
-      (message) => output.appendLine(message)
-    )
-    : undefined;
   controller = new RNotebookController(
     context.asAbsolutePath("resources/r/execute.R"),
     output,
-    () => sessionRequestWatcher?.synchronize() ?? Promise.resolve(undefined),
-    () => {
-      if (!sessionRequestWatcher) {
-        return async () => undefined;
-      }
-      const attachmentCheckpoint = sessionRequestWatcher.attachmentCheckpoint();
-      return (processId) => sessionRequestWatcher.waitForAttachment(
-        processId,
-        attachmentCheckpoint
-      );
-    },
+    () => Promise.resolve(undefined),
+    () => () => Promise.resolve(),
     vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
   const editing = new RNotebookEditing();
@@ -712,9 +679,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
-  if (sessionRequestWatcher) {
-    context.subscriptions.push(sessionRequestWatcher);
-  }
 
   for (const notebook of vscode.workspace.notebookDocuments) {
     if (notebook.notebookType !== NOTEBOOK_TYPE) {
