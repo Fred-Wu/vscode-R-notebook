@@ -29,11 +29,10 @@ export class RNotebookCodeCompletionProvider implements vscode.CompletionItemPro
       if (token.isCancellationRequested) return [];
       const prefix = match[1] ?? "";
       const candidates = kind === "quarto" ? completions.quarto : completions.rMarkdown;
-      return candidates.filter((item) => item.value.startsWith(prefix)).map((candidate) => {
-        const item = new vscode.CompletionItem(candidate.value, vscode.CompletionItemKind.Property);
+      return candidates.filter((item) => item.name.startsWith(prefix)).map((candidate) => {
+        const item = new vscode.CompletionItem(candidate.name, vscode.CompletionItemKind.Property);
         item.range = new vscode.Range(position.line, position.character - prefix.length, position.line, position.character);
-        item.insertText = candidate.value.endsWith(":") || kind === "rMarkdown"
-          ? candidate.value : `${candidate.value}: `;
+        item.insertText = `${candidate.name}: `;
         return item;
       });
     }
