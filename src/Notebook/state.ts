@@ -12,6 +12,7 @@ import { codeCellLabel } from "./options";
 interface StoredOutputItem {
   mime: string;
   data: string;
+  asset?: string;
 }
 
 interface StoredOutput {
@@ -107,7 +108,9 @@ function isNotebookState(value: unknown): value is NotebookState {
       output.items.every((item) =>
         isRecord(item) &&
         typeof item.mime === "string" &&
-        typeof item.data === "string"
+        typeof item.data === "string" &&
+        (item.asset === undefined ||
+          (typeof item.asset === "string" && /^[a-f0-9]{64}\.bin$/.test(item.asset)))
       ) &&
       (output.metadata === undefined || isRecord(output.metadata))
     );
@@ -252,7 +255,24 @@ export async function readNotebookStateFile(
 ): Promise<NotebookState | undefined> {
   try {
     const content = await fsPromises.readFile(`${documentPath}.r-notebook`);
-    return decodeNotebookState(content);
+    const state = decodeNotebookState(content);
+    if (!state) {
+      throw new Error("The notebook state file is invalid or corrupted.");
+    }
+    const assetDirectory = `${documentPath}.r-notebook.d`;
+    for (const cell of state.cellOutputs) {
+      for (const output of cell.outputs) {
+        for (const item of output.items) {
+          if (item.asset) {
+            item.data = (await fsPromises.readFile(
+              path.join(assetDirectory, item.asset)
+            )).toString("base64");
+            delete item.asset;
+          }
+        }
+      }
+    }
+    return state;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -266,12 +286,56 @@ export async function writeNotebookStateFile(
   state: NotebookState
 ): Promise<void> {
   const destination = `${documentPath}.r-notebook`;
+  const assetDirectory = `${destination}.d`;
+  const threshold = 128 * 1024;
+  const serialized: NotebookState = {
+    ...state,
+    cellOutputs: state.cellOutputs.map((cell) => ({
+      ...cell,
+      outputs: cell.outputs.map((output) => ({
+        ...output,
+        items: output.items.map((item) => ({ ...item })),
+      })),
+    })),
+  };
+  for (const cell of serialized.cellOutputs) {
+    for (const output of cell.outputs) {
+      for (const item of output.items) {
+        if (item.data.length <= Math.ceil(threshold * 4 / 3)) {
+          continue;
+        }
+        const data = Buffer.from(item.data, "base64");
+        if (data.length <= threshold) {
+          continue;
+        }
+        const filename = `${notebookSourceHash(data.toString("base64"))}.bin`;
+        await fsPromises.mkdir(assetDirectory, { recursive: true });
+        const assetPath = path.join(assetDirectory, filename);
+        try {
+          await fsPromises.access(assetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+          const temporaryAsset = `${assetPath}.${randomUUID()}.tmp`;
+          try {
+            await fsPromises.writeFile(temporaryAsset, data, { flag: "wx" });
+            await fsPromises.rename(temporaryAsset, assetPath);
+          } finally {
+            await fsPromises.rm(temporaryAsset, { force: true });
+          }
+        }
+        item.data = "";
+        item.asset = filename;
+      }
+    }
+  }
   const temporary = path.join(
     path.dirname(destination),
     `.${path.basename(destination)}.${randomUUID()}.tmp`
   );
   try {
-    const data = await gzipAsync(JSON.stringify(state), { level: 9 });
+    const data = await gzipAsync(JSON.stringify(serialized), { level: 9 });
     await fsPromises.writeFile(temporary, data, { flag: "wx" });
     await fsPromises.rename(temporary, destination);
   } finally {
