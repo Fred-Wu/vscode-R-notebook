@@ -39,11 +39,12 @@ function substitutePathVariables(value: string, notebookUri: vscode.Uri): string
 }
 
 export function resolveRExecutable(notebookUri: vscode.Uri): string {
-  const setting = rPathSetting();
-  const configured = vscode.workspace
-    .getConfiguration("r", notebookUri)
-    .get<string>(setting, "")
-    .trim();
+  const configuration = vscode.workspace.getConfiguration("r", notebookUri);
+  // Match vscode-R's migrated setting: the canonical executablePath takes
+  // precedence; the platform-specific rpath setting is deprecated.
+  const canonical = configuration.get<string>("executablePath", "").trim();
+  const setting = canonical ? "executablePath" : rPathSetting();
+  const configured = canonical || configuration.get<string>(setting, "").trim();
   if (configured.length > 0) {
     const substituted = substitutePathVariables(configured, notebookUri);
     const hasPathSeparator = substituted.includes("/") || substituted.includes("\\");
@@ -136,6 +137,8 @@ async function launchOptions(
   const api = (rExtension.isActive ? rExtension.exports : await rExtension.activate()) as {
     getRExecutablePath?: (resource?: vscode.Uri) => Promise<string | undefined>;
   };
+  // vscode-R's public resolver understands r.executablePath, the deprecated
+  // r.rpath.* entries, variable substitution and R discovery.
   const publicRPath = await api.getRExecutablePath?.(notebookUri);
   return {
     executable: publicRPath || resolveRExecutable(notebookUri),
