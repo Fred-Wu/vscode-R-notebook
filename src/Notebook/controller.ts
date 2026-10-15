@@ -119,7 +119,8 @@ export class RNotebookController implements vscode.Disposable {
         bridge: new RExecutionBridge(
           this.helperPath,
           process,
-          () => quartoExecutableSetting(notebook.uri)
+          () => quartoExecutableSetting(notebook.uri),
+          (message) => this.output.appendLine(`[${path.basename(notebook.uri.fsPath)}] ${message}`)
         ),
         queue: Promise.resolve(),
         stopped: false,
