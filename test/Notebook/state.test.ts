@@ -164,3 +164,34 @@ test("uses Quarto pipe labels to match edited code cells", () => {
   const source = "```{r}\n#| label: fitted-model\nlm(y ~ x)\n```\n";
   assert.equal(storedCells(source)[0]?.label, "fitted-model");
 });
+
+test("does not reassign deleted-cell output to an inserted cell", () => {
+  const before = [
+    "```{r keep}",
+    "keep <- 1",
+    "```",
+    "```{r removed}",
+    "removed <- 2",
+    "```",
+  ].join("\n");
+  const after = [
+    "```{r keep}",
+    "keep <- 1",
+    "```",
+    "```{r inserted}",
+    "inserted <- 3",
+    "```",
+  ].join("\n");
+  const cells = storedCells(before);
+  const state: NotebookState = {
+    version: 1,
+    sourceHash: notebookSourceHash(before),
+    cells,
+    cellOutputs: [{
+      cell: 1,
+      sourceHash: cells[1]!.sourceHash,
+      outputs: [{ items: [{ mime: "text/plain", data: "Mg==" }] }],
+    }],
+  };
+  assert.equal(reconcileNotebookState(after, state).cellOutputs.length, 0);
+});
