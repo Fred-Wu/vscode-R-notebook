@@ -137,39 +137,54 @@ async function readTextResult(requestDirectory: string): Promise<string> {
   return fsPromises.readFile(path.join(requestDirectory, "result.html"), "utf8");
 }
 
-function waitForDone(requestDirectory: string): { promise: Promise<void>; watcher: fs.FSWatcher } {
-  let resolveDone: (() => void) | undefined;
-  let rejectDone: ((error: Error) => void) | undefined;
+/** File change notifications can be dropped on Windows/network filesystems.
+ * Polling makes completion independent of fs.watch's platform-specific rename events.
+ */
+export function waitForDone(requestDirectory: string): { promise: Promise<void>; dispose(): void } {
+  let resolveDone!: () => void;
+  let rejectDone!: (error: Error) => void;
   let settled = false;
+  let checking = false;
   const promise = new Promise<void>((resolve, reject) => {
     resolveDone = resolve;
     rejectDone = reject;
   });
-  const check = (): void => {
-    if (settled) {
-      return;
-    }
-    fsPromises.access(path.join(requestDirectory, "done"), fs.constants.F_OK).then(
-      () => {
+  const donePath = path.join(requestDirectory, "done");
+  const check = async (): Promise<void> => {
+    if (settled || checking) return;
+    checking = true;
+    try {
+      await fsPromises.access(donePath, fs.constants.F_OK);
+      if (!settled) {
         settled = true;
-        resolveDone?.();
-      },
-      () => undefined
-    );
+        resolveDone();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !settled) {
+        settled = true;
+        rejectDone(error instanceof Error ? error : new Error(String(error)));
+      }
+    } finally {
+      checking = false;
+    }
   };
-  const watcher = fs.watch(requestDirectory, (event, filename) => {
-    if (event === "rename" && filename?.toString() === "done") {
-      check();
-    }
-  });
-  watcher.on("error", (error) => {
-    if (!settled) {
+  let watcher: fs.FSWatcher | undefined;
+  try {
+    watcher = fs.watch(requestDirectory, () => { void check(); });
+    watcher.on("error", () => { /* Polling remains authoritative. */ });
+  } catch {
+    // Polling works even when filesystem notifications are unsupported.
+  }
+  const interval = setInterval(() => { void check(); }, 150);
+  void check();
+  return {
+    promise,
+    dispose: () => {
       settled = true;
-      rejectDone?.(error);
-    }
-  });
-  check();
-  return { promise, watcher };
+      clearInterval(interval);
+      watcher?.close();
+    },
+  };
 }
 
 async function snapshotDocument(
@@ -375,7 +390,7 @@ export class RExecutionBridge {
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
-      completion?.watcher.close();
+      completion?.dispose();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -456,7 +471,7 @@ export class RExecutionBridge {
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
-      completion?.watcher.close();
+      completion?.dispose();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -510,7 +525,7 @@ export class RExecutionBridge {
       );
     } finally {
       dispatch?.dispose();
-      completion?.watcher.close();
+      completion?.dispose();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
