@@ -65,6 +65,23 @@ function parseMetadata(content: string): OutputMetadata {
   };
 }
 
+async function readPreview(requestDirectory: string, delivered: Set<string>, onOutput: (output: BridgeOutput) => Promise<void>): Promise<void> {
+  const entries = (await fsPromises.readdir(requestDirectory))
+    .filter((entry) => /^p\d{6}\.meta$/.test(entry))
+    .sort();
+  for (const entry of entries) {
+    if (delivered.has(entry)) continue;
+    const metadata = parseMetadata(await fsPromises.readFile(path.join(requestDirectory, entry), "utf8"));
+    const payloadPath = path.join(requestDirectory, metadata.file);
+    if (path.dirname(payloadPath) !== requestDirectory ||
+      !/^p\d{6}\.txt$/.test(metadata.file)) throw new Error("Unsafe preview path.");
+    const output: BridgeOutput = { kind: metadata.kind, mime: metadata.mime,
+      data: await fsPromises.readFile(payloadPath), name: metadata.name };
+    await onOutput(output);
+    delivered.add(entry);
+  }
+}
+
 async function readResult(requestDirectory: string): Promise<BridgeResult> {
   const entries = (await fsPromises.readdir(requestDirectory))
     .filter((entry) => /^\d{6}\.meta$/.test(entry))
@@ -235,7 +252,8 @@ export class RExecutionBridge {
     chunkSource: string,
     documentPath: string,
     token: vscode.CancellationToken,
-    context?: BridgeCellContext
+    context?: BridgeCellContext,
+    onOutput?: (output: BridgeOutput) => Promise<void>
   ): Promise<BridgeResult> {
     const requestDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-"));
     const documentExtension = normalizeNotebookExtension(documentPath);
@@ -249,6 +267,7 @@ export class RExecutionBridge {
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
+    const delivered = new Set<string>();
     let interruptCompletion: Promise<void> | undefined;
     let reportInterruptFailure!: (reason?: unknown) => void;
     const interruptFailure = new Promise<never>((_resolve, reject) => {
@@ -321,7 +340,33 @@ export class RExecutionBridge {
       if (token.isCancellationRequested) {
         interrupt();
       }
-      await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
+      if (onOutput) {
+        let completed = false;
+        let previewFailure: unknown;
+        const watcher = (async () => {
+          while (!completed && !cancelled) {
+            try {
+              await readPreview(requestDirectory, delivered, onOutput);
+            } catch (error) {
+              previewFailure = error;
+              return;
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 120));
+          }
+        })();
+        try {
+          await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
+        } finally {
+          completed = true;
+          await watcher;
+          if (!cancelled && !previewFailure) {
+            await readPreview(requestDirectory, delivered, onOutput);
+          }
+        }
+        if (previewFailure) throw previewFailure;
+      } else {
+        await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
+      }
       if (cancelled) {
         await interruptCompletion;
         return { success: false, outputs: [] };
