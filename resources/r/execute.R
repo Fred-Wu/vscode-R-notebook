@@ -815,10 +815,15 @@ r_notebook_prepare_html <- function(
       ".cell[style*=\"--vsc-r-notebook-plot-width\"] .quarto-layout-row{",
       "width:var(--vsc-r-notebook-plot-width);max-width:100%}",
       ".quarto-layout-cell img{width:100%;height:auto}",
+      ".cell-output-display > p,.cell-output-display > .quarto-figure{display:block;clear:both}",
+      ".cell-output-display img{max-width:100%;height:auto}",
+      ".cell-output-display > .quarto-layout-panel{display:block;clear:both}",
       "</style>"
     )
   } else if (base::isTRUE(rmarkdown_cell_output)) {
-    "<style>pre code{background-color:transparent}</style>"
+    "<style>pre code{background-color:transparent}",
+    ".figure,.figure img{max-width:100%;height:auto}",
+    ".figure{display:block;clear:both;margin-block:1rem}</style>"
   } else {
     ""
   }
