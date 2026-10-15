@@ -277,7 +277,10 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
   emit_preview <- function(value) {
     if (base::is.null(output_dir) || !base::length(value)) return(base::invisible())
     text <- base::paste0(base::as.character(value), collapse = "")
-    if (!base::nzchar(text)) return(base::invisible())
+    if (!base::nzchar(text) || base::grepl(
+      "<(?:table|style|div|html|script|svg)(?:[[:space:]>])",
+      text, ignore.case = TRUE, perl = TRUE
+    )) return(base::invisible())
     preview_index <<- preview_index + 1L
     name <- base::sprintf("p%06d", preview_index)
     base::writeChar(text, base::file.path(output_dir, base::paste0(name, ".txt")),
