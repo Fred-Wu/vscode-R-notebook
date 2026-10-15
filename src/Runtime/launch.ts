@@ -100,17 +100,34 @@ async function launchOptions(
   delete env.SESS_ENDPOINT;
   delete env.SESS_DISCOVERY_FILE;
   env.TERM_PROGRAM = "vscode";
-  env.VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = sessionIntegrationEnabled
-    ? "1"
-    : "0";
+  // An optional vscode-R attachment must never block notebook execution.
+  env.VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = "0";
 
   let initialization: HiddenRLaunchOptions["initialization"];
   if (sessionIntegrationEnabled) {
-    const session = await getVscodeRSessionApi();
-    const preparation = await session.prepareAttachment({ autoActivate: false });
-    if (!preparation) {
-      throw new Error("Enable r.sessionWatcher in vscode-R to attach the notebook.");
+    const preparationRequest = getVscodeRSessionApi().then(
+      (session) => session.prepareAttachment({ autoActivate: false })
+    );
+    let timeout: NodeJS.Timeout | undefined;
+    let preparation: Awaited<typeof preparationRequest> | undefined;
+    try {
+      preparation = await Promise.race([
+        preparationRequest,
+        new Promise<undefined>((resolve) => {
+          timeout = setTimeout(() => resolve(undefined), 3000);
+        }),
+      ]);
+    } catch (error) {
+      output.appendLine(`[${path.basename(notebookUri.fsPath)}] vscode-R sess preparation unavailable: ${String(error)}. Continuing without session integration.`);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
+    if (!preparation) {
+      // A timed-out preparation can finish later; release its script rather
+      // than leaving an unused attachment resource in vscode-R's storage.
+      void preparationRequest.then((late) => late?.dispose()).catch(() => undefined);
+    }
+    if (preparation) {
     const token = preparation.attachmentId;
     const successMarker = `__R_NOTEBOOK_READY_${token}__:`;
     const failureMarker = `__R_NOTEBOOK_ERROR_${token}__:`;
@@ -131,7 +148,11 @@ async function launchOptions(
         "})",
       ].join("\n"),
     };
+    env.VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = "1";
     output.appendLine(`[${path.basename(notebookUri.fsPath)}] Using vscode-R managed sess attachment.`);
+    } else {
+      output.appendLine(`[${path.basename(notebookUri.fsPath)}] Starting standalone R (sess preparation unavailable or slow).`);
+    }
   }
 
   const api = (rExtension.isActive ? rExtension.exports : await rExtension.activate()) as {
