@@ -695,6 +695,11 @@ export class RNotebookController implements vscode.Disposable {
               .map((notebookCell) => notebookCell.document.uri.toString())
               .join("\n"),
             cellId: cell.document.uri.toString(),
+          },
+          async (output) => {
+            if (!session.stopped && !execution.token.isCancellationRequested) {
+              await execution.appendOutput(bridgeOutputToNotebook(output));
+            }
           }
         );
         if (session.stopped) {
