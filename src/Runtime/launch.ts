@@ -121,7 +121,7 @@ async function launchOptions(
       command: [
         "local({",
         "  tryCatch({",
-        `    connected <- isTRUE(${preparation.command})`,
+        `    connected <- isTRUE((${preparation.command})$value)`,
         `    if (!connected) stop("vscode-R sess did not connect.")`,
         `    cat(${JSON.stringify(successMarker)}, Sys.getpid(), "\\n", sep = "")`,
         "  }, error = function(error) {",
