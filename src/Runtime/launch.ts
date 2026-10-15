@@ -125,7 +125,7 @@ async function launchOptions(
         `    if (!connected) stop("vscode-R sess did not connect.")`,
         `    cat(${JSON.stringify(successMarker)}, Sys.getpid(), "\\n", sep = "")`,
         "  }, error = function(error) {",
-        `    cat(${JSON.stringify(failureMarker)}, gsub("[\\r\\n]+", " ", conditionMessage(error)), "\\n", sep = "")`,
+        `    cat(${JSON.stringify(failureMarker)}, gsub("[[:cntrl:]]+", " ", conditionMessage(error)), "\\n", sep = "")`,
         "  })",
         "})",
       ].join("\n"),
