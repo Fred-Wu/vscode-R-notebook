@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { HiddenRProcess, type HiddenRLaunchOptions } from "./process";
-import { createVscodeRAttachmentInitialization } from "./vscodeR";
+import { getVscodeRSessionApi } from "./sess";
 
 const VSCODE_R_EXTENSION_ID = "REditorSupport.r";
 
@@ -96,6 +96,8 @@ async function launchOptions(
 
   delete env.VSCODE_INIT_R;
   delete env.VSCODE_WATCHER_DIR;
+  delete env.SESS_ENDPOINT;
+  delete env.SESS_DISCOVERY_FILE;
   env.TERM_PROGRAM = "vscode";
   env.VSCODE_R_NOTEBOOK_R_EXTENSION_INTEGRATION = sessionIntegrationEnabled
     ? "1"
@@ -103,22 +105,32 @@ async function launchOptions(
 
   let initialization: HiddenRLaunchOptions["initialization"];
   if (sessionIntegrationEnabled) {
-    await rExtension.activate();
-    const profilePath = path.join(rExtension.extensionPath, "R", "session", "profile.R");
-    const initPath = path.join(rExtension.extensionPath, "R", "session", "init.R");
-    if (!fs.existsSync(profilePath) || !fs.existsSync(initPath)) {
-      throw new Error("The installed vscode-R session bootstrap files could not be found.");
+    const session = await getVscodeRSessionApi();
+    const preparation = await session.prepareAttachment({ autoActivate: false });
+    if (!preparation) {
+      throw new Error("Enable r.sessionWatcher in vscode-R to attach the notebook.");
     }
-    env.R_PROFILE_USER_OLD = process.env.R_PROFILE_USER ?? "";
-    env.R_PROFILE_USER = profilePath;
-    env.VSCODE_INIT_R = "";
-    env.VSCODE_R_NOTEBOOK_INIT_R = initPath;
-    env.VSCODE_WATCHER_DIR = path.join(os.homedir(), ".vscode-R");
-    env.VSCODE_R_NOTEBOOK_SESSION_WD = startupDirectory;
-    initialization = createVscodeRAttachmentInitialization();
-    output.appendLine(
-      `[${path.basename(notebookUri.fsPath)}] Starting automatic vscode-R session attachment.`
-    );
+    const token = preparation.attachmentId;
+    const successMarker = `__R_NOTEBOOK_READY_${token}__:`;
+    const failureMarker = `__R_NOTEBOOK_ERROR_${token}__:`;
+    initialization = {
+      attachmentId: token,
+      preparation,
+      successMarker,
+      failureMarker,
+      command: [
+        "local({",
+        "  tryCatch({",
+        `    connected <- isTRUE(${preparation.command})`,
+        `    if (!connected) stop("vscode-R sess did not connect.")`,
+        `    cat(${JSON.stringify(successMarker)}, Sys.getpid(), "\\n", sep = "")`,
+        "  }, error = function(error) {",
+        `    cat(${JSON.stringify(failureMarker)}, gsub("[\\r\\n]+", " ", conditionMessage(error)), "\\n", sep = "")`,
+        "  })",
+        "})",
+      ].join("\n"),
+    };
+    output.appendLine(`[${path.basename(notebookUri.fsPath)}] Using vscode-R managed sess attachment.`);
   }
 
   return {
