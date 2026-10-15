@@ -92,7 +92,7 @@ export class RNotebookController implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
     private readonly sessionIntegrationEnabled: boolean
   ) {
-    this.attachment = new InlineSessCoordinator((message) => this.output.appendLine(`[Session] ${message}`));
+    this.attachment = new InlineSessCoordinator();
     this.controller = vscode.notebooks.createNotebookController(
       "r-notebook-inline",
       NOTEBOOK_TYPE,
@@ -290,17 +290,6 @@ export class RNotebookController implements vscode.Disposable {
     }
     await this.attachment.select(existingSession?.process);
     await this.startR(notebook, true);
-  }
-
-  async focusCell(notebook: vscode.NotebookDocument): Promise<void> {
-    const key = notebook.uri.toString();
-    const session = this.sessions.get(key);
-    if (!session || session.stopped) {
-      await this.selectNotebook(notebook);
-      return;
-    }
-    this.selectedNotebookKey = key;
-    await this.attachment.select(session.process);
   }
 
   private async execute(cells: readonly vscode.NotebookCell[]): Promise<void> {

@@ -13,6 +13,7 @@ import {
   removeHeaderLabelShadowedByPipe,
 } from "./Notebook/options";
 import { RNotebookMarkdownCompletionProvider } from "./Notebook/markdownCompletions";
+import { RNotebookCodeCompletionProvider } from "./Notebook/rCompletions";
 import { RMarkdownCellStatusBarProvider } from "./Notebook/statusBar";
 import { RNotebookSerializer } from "./Notebook/serializer";
 import {
@@ -37,16 +38,6 @@ function isNotebookCell(value: unknown): value is vscode.NotebookCell {
     "document" in value &&
     "notebook" in value &&
     "kind" in value
-  );
-}
-
-function notebookForCellEditor(editor: vscode.TextEditor | undefined): vscode.NotebookDocument | undefined {
-  const uri = editor?.document.uri;
-  if (uri?.scheme !== "vscode-notebook-cell") return undefined;
-  const key = uri.toString();
-  return vscode.workspace.notebookDocuments.find((notebook) =>
-    notebook.notebookType === NOTEBOOK_TYPE &&
-    notebook.getCells().some((cell) => cell.document.uri.toString() === key)
   );
 }
 
@@ -221,6 +212,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const optionCompletions = new CellOptionCompletionProvider(output);
   const markdownCompletions = new RNotebookMarkdownCompletionProvider(output);
+  const codeCompletions = new RNotebookCodeCompletionProvider(output);
   const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
   );
@@ -289,6 +281,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCompletionItemProvider(
       { language: "markdown", notebookType: NOTEBOOK_TYPE },
       markdownCompletions
+    ),
+    vscode.languages.registerCompletionItemProvider(
+      { scheme: "vscode-notebook-cell", language: "r", notebookType: NOTEBOOK_TYPE },
+      codeCompletions,
+      "(", "[", "$", "@", ":", ",", "'", '"'
     ),
     vscode.notebooks.registerNotebookCellStatusBarItemProvider(
       NOTEBOOK_TYPE,
@@ -495,16 +492,9 @@ export function activate(context: vscode.ExtensionContext): void {
       ) {
         prepareNotebook(editor.notebook, stateEnabled(editor.notebook.uri));
       }
-      void controller.selectNotebook(editor?.notebook ?? notebookForCellEditor(vscode.window.activeTextEditor)).catch((error: unknown) => {
+      void controller.selectNotebook(editor?.notebook).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[Session] Could not start the selected notebook session: ${message}`);
-      });
-    }),
-    vscode.window.onDidChangeActiveTextEditor((editor) => {
-      const notebook = notebookForCellEditor(editor);
-      if (!notebook) return;
-      void controller.focusCell(notebook).catch((error: unknown) => {
-        output.appendLine(`[Session] Could not activate focused notebook cell session: ${String(error)}`);
       });
     }),
     vscode.window.onDidCloseTerminal((terminal) => {
@@ -707,8 +697,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "r.notebook.activeEditor",
     vscode.window.activeNotebookEditor?.notebook.notebookType === NOTEBOOK_TYPE
   );
-  void controller.selectNotebook(vscode.window.activeNotebookEditor?.notebook ??
-    notebookForCellEditor(vscode.window.activeTextEditor)).catch(
+  void controller.selectNotebook(vscode.window.activeNotebookEditor?.notebook).catch(
     (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       output.appendLine(`[Session] Could not start the selected notebook session: ${message}`);

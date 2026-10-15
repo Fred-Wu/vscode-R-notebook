@@ -45,8 +45,6 @@ export async function getVscodeRSessionApi(): Promise<VscodeRSessionApi> {
 
 /** Track consumer-owned R processes by the sess attachment/connection IDs. */
 export class InlineSessCoordinator implements vscode.Disposable {
-  constructor(private readonly log: (message: string) => void = () => undefined) {}
-
   private readonly processes = new Set<HiddenRProcess>();
   private readonly connections = new Map<string, SessReference>();
   private preferred: HiddenRProcess | undefined;
@@ -92,9 +90,7 @@ export class InlineSessCoordinator implements vscode.Disposable {
     const live = api.getSessionReference(reference.sessionId);
     if (!live || live.connectionId !== reference.connectionId ||
       live.attachmentId !== attachmentId) return;
-    if (!await api.activate(live.sessionId, { connectionId: live.connectionId })) {
-      this.log(`vscode-R did not activate notebook sess connection ${live.sessionId}.`);
-    }
+    await api.activate(live.sessionId, { connectionId: live.connectionId });
   }
 
   async ensureAttached(process: HiddenRProcess, makePreferred: boolean): Promise<void> {
