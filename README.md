@@ -13,7 +13,8 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Edit cell labels and options from the cell toolbar.
 - Show suggestions based on installed R and Quarto tools and notebook content.
 - Send code cells to [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
-- Save and restore outputs with an optional `.r-notebook` sidecar file.
+- Save and restore outputs with an optional `.r-notebook` sidecar file (large outputs use an adjacent `.r-notebook.d` asset directory).
+- Display text, warnings, messages, and supported PNG/SVG plot previews while code is running; the final knitr/Quarto-rendered result replaces the previews.
 - Connect the active session to [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r) viewers.
 
 ## Setup
@@ -87,6 +88,8 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 | `r.notebook.sessionShutdownDelayMinutes`    | `15`    | Retains a closed notebook's R session for this many minutes |
 
 - Disable `r.notebook.saveState` to ignore existing sidecar files and stop creating new ones.
+- Keep the `.r-notebook` file and its corresponding `.r-notebook.d` directory together when moving a notebook. State writes are atomic; unreferenced asset files are pruned after successful saves.
+- Preview output is provisional: the final knitr/Quarto HTML is still authoritative for captions, filters and widgets.
 
 ## Dependencies
 
