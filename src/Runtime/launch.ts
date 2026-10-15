@@ -133,8 +133,12 @@ async function launchOptions(
     output.appendLine(`[${path.basename(notebookUri.fsPath)}] Using vscode-R managed sess attachment.`);
   }
 
+  const api = (rExtension.isActive ? rExtension.exports : await rExtension.activate()) as {
+    getRExecutablePath?: (resource?: vscode.Uri) => Promise<string | undefined>;
+  };
+  const publicRPath = await api.getRExecutablePath?.(notebookUri);
   return {
-    executable: resolveRExecutable(notebookUri),
+    executable: publicRPath || resolveRExecutable(notebookUri),
     args: [
       "--quiet",
       "--no-save",
