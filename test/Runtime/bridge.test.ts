@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type * as vscode from "vscode";
-import { RExecutionBridge, waitForDone } from "../../src/Runtime/bridge";
+import { RExecutionBridge } from "../../src/Runtime/bridge";
 import type { InlineDispatch, InlineRTransport } from "../../src/Runtime/process";
 
 const neverCancelled = {
@@ -93,56 +93,4 @@ test("the bridge sends an R request and reads its result", async (t) => {
   );
   assert.deepEqual(cancelled, { success: false, outputs: [] });
   assert.equal(transport.requests.length, 2);
-});
-
-test("streams published previews before the final done marker", async (t) => {
-  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-stream-test-"));
-  t.after(() => fsPromises.rm(directory, { recursive: true, force: true }));
-  const documentPath = path.join(directory, "stream.Rmd");
-  await fsPromises.writeFile(documentPath, "```{r}\nprint(1)\n```\n");
-  let release!: () => void;
-  const completed = new Promise<void>((resolve) => { release = resolve; });
-  class StreamingTransport implements InlineRTransport {
-    async send(command: string): Promise<InlineDispatch> {
-      const match = command.match(/^base::source\(("(?:\\\\.|[^"])*"), echo = FALSE\)$/);
-      assert.ok(match?.[1]);
-      const request = await fsPromises.readFile(JSON.parse(match[1]) as string, "utf8");
-      const outputDir = rStringArgument(request, "output_dir");
-      await fsPromises.writeFile(path.join(outputDir, "p000001.txt"), "partial");
-      await fsPromises.writeFile(path.join(outputDir, "p000001.meta"),
-        "kind: display\nmime: text/plain\nfile: p000001.txt\n");
-      void completed.then(async () => {
-        await fsPromises.writeFile(path.join(outputDir, "000001.txt"), "final");
-        await fsPromises.writeFile(path.join(outputDir, "000001.meta"),
-          "kind: display\nmime: text/plain\nfile: 000001.txt\n");
-        await fsPromises.writeFile(path.join(outputDir, "done"), "true\n");
-      });
-      return { failure: new Promise<never>(() => undefined), dispose() {} };
-    }
-    async interrupt(): Promise<void> {}
-  }
-  const previews: string[] = [];
-  const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), new StreamingTransport());
-  const running = bridge.execute("```{r}\nprint(1)\n```", documentPath,
-    neverCancelled, undefined, async (output) => {
-      previews.push(Buffer.from(output.data).toString("utf8"));
-      release();
-    });
-  const result = await running;
-  assert.deepEqual(previews, ["partial"]);
-  assert.equal(Buffer.from(result.outputs[0]?.data ?? []).toString("utf8"), "final");
-});
-
-test("completes after a done marker even without relying on a rename event", async (t) => {
-  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-done-"));
-  t.after(() => fsPromises.rm(directory, { recursive: true, force: true }));
-  const completion = waitForDone(directory);
-  t.after(() => completion.dispose());
-  await fsPromises.writeFile(path.join(directory, "done"), "true\n");
-  await Promise.race([
-    completion.promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("done marker was not observed")), 2500)
-    ),
-  ]);
 });

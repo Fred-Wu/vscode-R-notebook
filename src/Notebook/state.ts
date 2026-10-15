@@ -1,18 +1,12 @@
 import { createHash } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
-import { gunzipSync, gzip } from "node:zlib";
-import { promisify } from "node:util";
-import * as path from "node:path";
-import { randomUUID } from "node:crypto";
-
-const gzipAsync = promisify(gzip);
+import { gzipSync, gunzipSync } from "node:zlib";
 import { codeCellSource, parseDocument } from "./document";
 import { codeCellLabel } from "./options";
 
 interface StoredOutputItem {
   mime: string;
   data: string;
-  asset?: string;
 }
 
 interface StoredOutput {
@@ -108,9 +102,7 @@ function isNotebookState(value: unknown): value is NotebookState {
       output.items.every((item) =>
         isRecord(item) &&
         typeof item.mime === "string" &&
-        typeof item.data === "string" &&
-        (item.asset === undefined ||
-          (typeof item.asset === "string" && /^[a-f0-9]{64}\.bin$/.test(item.asset)))
+        typeof item.data === "string"
       ) &&
       (output.metadata === undefined || isRecord(output.metadata))
     );
@@ -205,10 +197,16 @@ export function reconcileNotebookState(
 
   matchUnique("label");
   matchUnique("sourceHash");
-  // Never infer cell identity solely from its position. A deleted code cell
-  // replaced by a new one at the same index must not inherit its outputs.
-  // Edited labeled cells already match on label; unchanged cells on hash.
-
+  const remainingOld = oldCode.filter((cell) => !mapped.has(cell.index));
+  const remainingNew = newCode.filter((cell) => !usedNew.has(cell.index));
+  if (remainingOld.length === remainingNew.length) {
+    remainingOld.forEach((cell, index) => {
+      const replacement = remainingNew[index];
+      if (replacement) {
+        mapped.set(cell.index, replacement.index);
+      }
+    });
+  }
 
   const cellOutputs = state.cellOutputs.flatMap((output) => {
     const nextCell = mapped.get(output.cell);
@@ -247,24 +245,7 @@ export async function readNotebookStateFile(
 ): Promise<NotebookState | undefined> {
   try {
     const content = await fsPromises.readFile(`${documentPath}.r-notebook`);
-    const state = decodeNotebookState(content);
-    if (!state) {
-      throw new Error("The notebook state file is invalid or corrupted.");
-    }
-    const assetDirectory = `${documentPath}.r-notebook.d`;
-    for (const cell of state.cellOutputs) {
-      for (const output of cell.outputs) {
-        for (const item of output.items) {
-          if (item.asset) {
-            item.data = (await fsPromises.readFile(
-              path.join(assetDirectory, item.asset)
-            )).toString("base64");
-            delete item.asset;
-          }
-        }
-      }
-    }
-    return state;
+    return decodeNotebookState(content);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -277,77 +258,8 @@ export async function writeNotebookStateFile(
   documentPath: string,
   state: NotebookState
 ): Promise<void> {
-  const destination = `${documentPath}.r-notebook`;
-  const assetDirectory = `${destination}.d`;
-  const threshold = 128 * 1024;
-  const serialized: NotebookState = {
-    ...state,
-    cellOutputs: state.cellOutputs.map((cell) => ({
-      ...cell,
-      outputs: cell.outputs.map((output) => ({
-        ...output,
-        items: output.items.map((item) => ({ ...item })),
-      })),
-    })),
-  };
-  for (const cell of serialized.cellOutputs) {
-    for (const output of cell.outputs) {
-      for (const item of output.items) {
-        if (item.data.length <= Math.ceil(threshold * 4 / 3)) {
-          continue;
-        }
-        const data = Buffer.from(item.data, "base64");
-        if (data.length <= threshold) {
-          continue;
-        }
-        const filename = `${notebookSourceHash(data.toString("base64"))}.bin`;
-        await fsPromises.mkdir(assetDirectory, { recursive: true });
-        const assetPath = path.join(assetDirectory, filename);
-        try {
-          await fsPromises.access(assetPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
-          const temporaryAsset = `${assetPath}.${randomUUID()}.tmp`;
-          try {
-            await fsPromises.writeFile(temporaryAsset, data, { flag: "wx" });
-            await fsPromises.rename(temporaryAsset, assetPath);
-          } finally {
-            await fsPromises.rm(temporaryAsset, { force: true });
-          }
-        }
-        item.data = "";
-        item.asset = filename;
-      }
-    }
-  }
-  const temporary = path.join(
-    path.dirname(destination),
-    `.${path.basename(destination)}.${randomUUID()}.tmp`
+  await fsPromises.writeFile(
+    `${documentPath}.r-notebook`,
+    gzipSync(JSON.stringify(state), { level: 9 })
   );
-  try {
-    const data = await gzipAsync(JSON.stringify(serialized), { level: 9 });
-    await fsPromises.writeFile(temporary, data, { flag: "wx" });
-    await fsPromises.rename(temporary, destination);
-    // Remove unreferenced assets only after the new manifest is committed.
-    const referenced = new Set(serialized.cellOutputs.flatMap((cell) =>
-      cell.outputs.flatMap((output) =>
-        output.items.flatMap((item) => item.asset ? [item.asset] : [])
-      )
-    ));
-    try {
-      for (const name of await fsPromises.readdir(assetDirectory)) {
-        if (/^[a-f0-9]{64}\.bin$/.test(name) && !referenced.has(name)) {
-          await fsPromises.rm(path.join(assetDirectory, name), { force: true });
-        }
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        // Asset cleanup is best-effort and must not turn a successful save into a failure.
-      }
-    }
-  } finally {
-    await fsPromises.rm(temporary, { force: true });
-  }
 }

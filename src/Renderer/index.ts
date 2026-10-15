@@ -34,8 +34,6 @@ interface RefreshRequest {
 const renderedSignatures = new WeakMap<HTMLElement, string>();
 let responseApplication = Promise.resolve();
 let headScriptsLoaded = false;
-let lastNativeHtml: string | undefined;
-let lastNativeDocument: Document | undefined;
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -138,13 +136,7 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     return;
   }
 
-  // Multiple markup cells receive the same native document. Parse it once per
-  // document revision instead of reparsing the full HTML for every cell.
-  if (lastNativeHtml !== response.html || !lastNativeDocument) {
-    lastNativeHtml = response.html;
-    lastNativeDocument = new DOMParser().parseFromString(response.html, "text/html");
-  }
-  const nativeDocument = lastNativeDocument;
+  const nativeDocument = new DOMParser().parseFromString(response.html, "text/html");
   const nativeCell = nativeDocument.getElementById(response.marker);
   if (!nativeCell) {
     placeholder.title = "The native text output did not contain this Markdown cell.";
@@ -155,15 +147,6 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     response.cells.map((cell) => [encodeURIComponent(cell.id), cell])
   );
   const firstNativeCell = nativeDocument.querySelector(".r-notebook-markdown-cell");
-  const lastNativeCell = Array.from(nativeDocument.querySelectorAll(
-    ".r-notebook-markdown-cell"
-  )).at(-1);
-  // Pandoc/Quarto place document-level footnotes outside the fenced Markdown
-  // cells. Include them in the final Markdown cell instead of discarding them.
-  const endNotes = Array.from(nativeDocument.querySelectorAll<HTMLElement>(
-    "section.footnotes, div.footnotes"
-  )).filter((node) => !node.closest(".r-notebook-markdown-cell"));
-  const endNoteSignature = endNotes.map((node) => node.outerHTML).join("\n");
   const assetSignature = Array.from(
     nativeDocument.head.querySelectorAll("style, script"),
     (element) => element.outerHTML
@@ -192,7 +175,6 @@ async function applyResponse(response: RenderResponse): Promise<void> {
         assetSignature,
         frontMatterSignature,
         renderedCell.outerHTML,
-        renderedCell === lastNativeCell ? endNoteSignature : "",
       ].join("\n");
       if (element !== placeholder && renderedSignatures.get(element) === signature) {
         element.removeAttribute("data-r-notebook-text-request");
@@ -228,9 +210,6 @@ async function applyResponse(response: RenderResponse): Promise<void> {
           (node) => document.importNode(node, true)
         )
       );
-      if (renderedCell === lastNativeCell) {
-        content.push(...endNotes.map((node) => document.importNode(node, true)));
-      }
       element.replaceChildren(...content);
       element.id = cell.marker;
       element.className = renderedCell.className;

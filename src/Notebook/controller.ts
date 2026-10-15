@@ -25,7 +25,6 @@ import {
   quartoExecutableSetting,
 } from "../Runtime/launch";
 import type { RConsoleTransport } from "../Runtime/console";
-
 import { isQuartoNotebook } from "../notebookFile";
 
 interface NotebookSession {
@@ -119,8 +118,7 @@ export class RNotebookController implements vscode.Disposable {
         bridge: new RExecutionBridge(
           this.helperPath,
           process,
-          () => quartoExecutableSetting(notebook.uri),
-          (message) => this.output.appendLine(`[${path.basename(notebook.uri.fsPath)}] ${message}`)
+          () => quartoExecutableSetting(notebook.uri)
         ),
         queue: Promise.resolve(),
         stopped: false,
@@ -420,13 +418,11 @@ export class RNotebookController implements vscode.Disposable {
     }
     const renderKey = `${sourceHash}:${session.textRevision}`;
     if (session.pendingTextRender?.key === renderKey) {
-      // One native render serves all markup cells. Only its first response
-      // should request reloading document-level scripts.
       return session.pendingTextRender.promise.then((html) => ({
         html,
         marker: target.marker,
         cells,
-        newDocument: false,
+        newDocument: true,
       }));
     }
     session.pendingTextRender?.cancellation.cancel();
@@ -632,7 +628,6 @@ export class RNotebookController implements vscode.Disposable {
     }
   }
 
-
   private async executeCell(
     cell: vscode.NotebookCell,
     session: NotebookSession
@@ -687,11 +682,6 @@ export class RNotebookController implements vscode.Disposable {
               .map((notebookCell) => notebookCell.document.uri.toString())
               .join("\n"),
             cellId: cell.document.uri.toString(),
-          },
-          async (output) => {
-            if (!session.stopped && !execution.token.isCancellationRequested) {
-              await execution.appendOutput(bridgeOutputToNotebook(output));
-            }
           }
         );
         if (session.stopped) {

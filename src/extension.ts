@@ -6,7 +6,6 @@ import {
 import { RNotebookController } from "./Notebook/controller";
 import { RNotebookEditing } from "./Notebook/editing";
 import { CellOptionCompletionProvider } from "./Notebook/optionCompletions";
-import { RNotebookCodeCompletionProvider } from "./Notebook/codeCompletions";
 import { mergeRMarkdownCellOptions } from "./Notebook/optionMerge";
 import { CellOptionsEditor } from "./Notebook/optionsEditor";
 import {
@@ -280,11 +279,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCompletionItemProvider(
       { language: "markdown", notebookType: NOTEBOOK_TYPE },
       markdownCompletions
-    ),
-    vscode.languages.registerCompletionItemProvider(
-      { language: "r", notebookType: NOTEBOOK_TYPE },
-      new RNotebookCodeCompletionProvider(optionCompletions),
-      "|", " "
     ),
     vscode.notebooks.registerNotebookCellStatusBarItemProvider(
       NOTEBOOK_TYPE,

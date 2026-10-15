@@ -65,23 +65,6 @@ function parseMetadata(content: string): OutputMetadata {
   };
 }
 
-async function readPreview(requestDirectory: string, delivered: Set<string>, onOutput: (output: BridgeOutput) => Promise<void>): Promise<void> {
-  const entries = (await fsPromises.readdir(requestDirectory))
-    .filter((entry) => /^p\d{6}\.meta$/.test(entry))
-    .sort();
-  for (const entry of entries) {
-    if (delivered.has(entry)) continue;
-    const metadata = parseMetadata(await fsPromises.readFile(path.join(requestDirectory, entry), "utf8"));
-    const payloadPath = path.join(requestDirectory, metadata.file);
-    if (path.dirname(payloadPath) !== requestDirectory ||
-      !/^p\d{6}\.(?:txt|png|svg)$/.test(metadata.file)) throw new Error("Unsafe preview path.");
-    const output: BridgeOutput = { kind: metadata.kind, mime: metadata.mime,
-      data: await fsPromises.readFile(payloadPath), name: metadata.name };
-    await onOutput(output);
-    delivered.add(entry);
-  }
-}
-
 async function readResult(requestDirectory: string): Promise<BridgeResult> {
   const entries = (await fsPromises.readdir(requestDirectory))
     .filter((entry) => /^\d{6}\.meta$/.test(entry))
@@ -137,54 +120,39 @@ async function readTextResult(requestDirectory: string): Promise<string> {
   return fsPromises.readFile(path.join(requestDirectory, "result.html"), "utf8");
 }
 
-/** File change notifications can be dropped on Windows/network filesystems.
- * Polling makes completion independent of fs.watch's platform-specific rename events.
- */
-export function waitForDone(requestDirectory: string): { promise: Promise<void>; dispose(): void } {
-  let resolveDone!: () => void;
-  let rejectDone!: (error: Error) => void;
+function waitForDone(requestDirectory: string): { promise: Promise<void>; watcher: fs.FSWatcher } {
+  let resolveDone: (() => void) | undefined;
+  let rejectDone: ((error: Error) => void) | undefined;
   let settled = false;
-  let checking = false;
   const promise = new Promise<void>((resolve, reject) => {
     resolveDone = resolve;
     rejectDone = reject;
   });
-  const donePath = path.join(requestDirectory, "done");
-  const check = async (): Promise<void> => {
-    if (settled || checking) return;
-    checking = true;
-    try {
-      await fsPromises.access(donePath, fs.constants.F_OK);
-      if (!settled) {
-        settled = true;
-        resolveDone();
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !settled) {
-        settled = true;
-        rejectDone(error instanceof Error ? error : new Error(String(error)));
-      }
-    } finally {
-      checking = false;
+  const check = (): void => {
+    if (settled) {
+      return;
     }
+    fsPromises.access(path.join(requestDirectory, "done"), fs.constants.F_OK).then(
+      () => {
+        settled = true;
+        resolveDone?.();
+      },
+      () => undefined
+    );
   };
-  let watcher: fs.FSWatcher | undefined;
-  try {
-    watcher = fs.watch(requestDirectory, () => { void check(); });
-    watcher.on("error", () => { /* Polling remains authoritative. */ });
-  } catch {
-    // Polling works even when filesystem notifications are unsupported.
-  }
-  const interval = setInterval(() => { void check(); }, 150);
-  void check();
-  return {
-    promise,
-    dispose: () => {
+  const watcher = fs.watch(requestDirectory, (event, filename) => {
+    if (event === "rename" && filename?.toString() === "done") {
+      check();
+    }
+  });
+  watcher.on("error", (error) => {
+    if (!settled) {
       settled = true;
-      clearInterval(interval);
-      watcher?.close();
-    },
-  };
+      rejectDone?.(error);
+    }
+  });
+  check();
+  return { promise, watcher };
 }
 
 async function snapshotDocument(
@@ -260,16 +228,14 @@ export class RExecutionBridge {
   constructor(
     private readonly helperPath: string,
     private readonly transport: InlineRTransport,
-    private readonly configuredQuartoExecutable?: () => string,
-    private readonly log: (message: string) => void = () => undefined
+    private readonly configuredQuartoExecutable?: () => string
   ) {}
 
   async execute(
     chunkSource: string,
     documentPath: string,
     token: vscode.CancellationToken,
-    context?: BridgeCellContext,
-    onOutput?: (output: BridgeOutput) => Promise<void>
+    context?: BridgeCellContext
   ): Promise<BridgeResult> {
     const requestDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-"));
     const documentExtension = normalizeNotebookExtension(documentPath);
@@ -283,7 +249,6 @@ export class RExecutionBridge {
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
-    const delivered = new Set<string>();
     let interruptCompletion: Promise<void> | undefined;
     let reportInterruptFailure!: (reason?: unknown) => void;
     const interruptFailure = new Promise<never>((_resolve, reject) => {
@@ -341,11 +306,9 @@ export class RExecutionBridge {
       if (token.isCancellationRequested) {
         return { success: false, outputs: [] };
       }
-      this.log(`Executing notebook request: ${requestPath}`);
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
-      this.log("Notebook request sent to R; awaiting completion marker.");
       const interrupt = (): void => {
         if (cancelled) {
           return;
@@ -358,50 +321,16 @@ export class RExecutionBridge {
       if (token.isCancellationRequested) {
         interrupt();
       }
-      const reportDelay = setTimeout(() => {
-        this.log(`Notebook request is still running; checking R execution and ${path.join(requestDirectory, "done")}`);
-      }, 10000);
-      try {
-      if (onOutput) {
-        let completed = false;
-        let previewFailure: unknown;
-        const watcher = (async () => {
-          while (!completed && !cancelled) {
-            try {
-              await readPreview(requestDirectory, delivered, onOutput);
-            } catch (error) {
-              previewFailure = error;
-              return;
-            }
-            await new Promise<void>((resolve) => setTimeout(resolve, 120));
-          }
-        })();
-        try {
-          await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
-        } finally {
-          completed = true;
-          await watcher;
-          if (!cancelled && !previewFailure) {
-            await readPreview(requestDirectory, delivered, onOutput);
-          }
-        }
-        if (previewFailure) throw previewFailure;
-      } else {
-        await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
-      }
-      } finally {
-        clearTimeout(reportDelay);
-      }
+      await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
       if (cancelled) {
         await interruptCompletion;
         return { success: false, outputs: [] };
       }
-      this.log("Notebook execution completed; reading final outputs.");
       return await readResult(requestDirectory);
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
-      completion?.dispose();
+      completion?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -482,7 +411,7 @@ export class RExecutionBridge {
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
-      completion?.dispose();
+      completion?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -511,7 +440,12 @@ export class RExecutionBridge {
           "    if (!base::exists(object_name, envir = .GlobalEnv, inherits = FALSE)) {",
           '      base::stop(base::paste("Cannot find", object_name, "in the notebook session."))',
           "    }",
-          "    utils::View(base::get(object_name, envir = .GlobalEnv, inherits = FALSE), title = object_name)",
+          '    vscode_tools <- base::as.environment("tools:vscode")',
+          '    view <- base::get0(".vsc.view", envir = vscode_tools, mode = "function", inherits = FALSE)',
+          "    if (base::is.null(view)) {",
+          '      base::stop("vscode-R Data Viewer is disabled for this session.")',
+          "    }",
+          "    view(base::get(object_name, envir = .GlobalEnv, inherits = FALSE), title = object_name)",
           "    success <- TRUE",
           "  }, error = function(error) {",
           "    base::writeLines(",
@@ -536,7 +470,7 @@ export class RExecutionBridge {
       );
     } finally {
       dispatch?.dispose();
-      completion?.dispose();
+      completion?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }

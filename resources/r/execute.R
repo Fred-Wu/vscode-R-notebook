@@ -253,42 +253,7 @@ r_notebook_compact_data_frame_source <- function(source) {
   !function_name %in% c("head", "tail")
 }
 
-r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, output_dir = NULL) {
-  preview_index <- 0L
-  emit_preview_file <- function(filename, mime) {
-    if (base::is.null(output_dir) || !base::file.exists(filename)) {
-      return(base::invisible())
-    }
-    preview_index <<- preview_index + 1L
-    name <- base::sprintf("p%06d", preview_index)
-    extension <- if (base::identical(mime, "image/svg+xml")) ".svg" else ".png"
-    payload <- base::paste0(name, extension)
-    if (!base::file.copy(filename, base::file.path(output_dir, payload), overwrite = TRUE)) {
-      return(base::invisible())
-    }
-    metadata <- base::file.path(output_dir, base::paste0(".", name, ".meta.tmp"))
-    base::writeLines(c("kind: display", base::paste0("mime: ", mime),
-      base::paste0("file: ", payload)), metadata, useBytes = TRUE)
-    if (!base::file.rename(metadata, base::file.path(output_dir, base::paste0(name, ".meta")))) {
-      base::stop("Could not publish notebook plot preview.")
-    }
-    base::invisible()
-  }
-  emit_preview <- function(value) {
-    if (base::is.null(output_dir) || !base::length(value)) return(base::invisible())
-    text <- base::paste0(base::as.character(value), collapse = "")
-    if (!base::nzchar(text)) return(base::invisible())
-    preview_index <<- preview_index + 1L
-    name <- base::sprintf("p%06d", preview_index)
-    base::writeChar(text, base::file.path(output_dir, base::paste0(name, ".txt")),
-      eos = NULL, useBytes = TRUE)
-    metadata <- base::file.path(output_dir, base::paste0(".", name, ".meta.tmp"))
-    base::writeLines(c("kind: display", "mime: text/plain",
-      base::paste0("file: ", name, ".txt")), metadata, useBytes = TRUE)
-    if (!base::file.rename(metadata, base::file.path(output_dir,
-      base::paste0(name, ".meta")))) base::stop("Could not publish notebook preview.")
-    base::invisible()
-  }
+r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) {
   previous_labels <- runtime$cell_labels[[cell_id]]
   if (base::is.null(previous_labels)) {
     previous_labels <- base::character()
@@ -341,20 +306,6 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
         arguments <- list(...)
         render_state$compact_data_frame <- TRUE
         output_handler <- arguments$output_handler
-        if (base::inherits(output_handler, "output_handler")) {
-          for (type in c("text", "message", "warning")) {
-            handler <- output_handler[[type]]
-            if (base::is.function(handler)) {
-              output_handler[[type]] <- base::local({
-                native_handler <- handler
-                function(value, ...) {
-                  base::try(emit_preview(value), silent = TRUE)
-                  native_handler(value, ...)
-                }
-              })
-            }
-          }
-        }
         if (
           base::inherits(output_handler, "output_handler") &&
             base::is.function(output_handler$source)
@@ -409,15 +360,6 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
         ""
       }
       plot_wrapper <- function(path, options) {
-        if (base::is.character(path)) {
-          for (figure in path) {
-            if (base::file.exists(figure) &&
-              base::grepl("\\.(png|svg)$", figure, ignore.case = TRUE)) {
-              base::try(emit_preview_file(figure, if (base::grepl("\\.svg$", figure, ignore.case = TRUE))
-                "image/svg+xml" else "image/png"), silent = TRUE)
-            }
-          }
-        }
         device_width <- tryCatch(
           grDevices::dev.size("in")[[1L]],
           error = function(error) NA_real_
@@ -815,15 +757,10 @@ r_notebook_prepare_html <- function(
       ".cell[style*=\"--vsc-r-notebook-plot-width\"] .quarto-layout-row{",
       "width:var(--vsc-r-notebook-plot-width);max-width:100%}",
       ".quarto-layout-cell img{width:100%;height:auto}",
-      ".cell-output-display > p,.cell-output-display > .quarto-figure{display:block;clear:both}",
-      ".cell-output-display img{max-width:100%;height:auto}",
-      ".cell-output-display > .quarto-layout-panel{display:block;clear:both}",
       "</style>"
     )
   } else if (base::isTRUE(rmarkdown_cell_output)) {
-    "<style>pre code{background-color:transparent}",
-    ".figure,.figure img{max-width:100%;height:auto}",
-    ".figure{display:block;clear:both;margin-block:1rem}</style>"
+    "<style>pre code{background-color:transparent}</style>"
   } else {
     ""
   }
@@ -1336,8 +1273,7 @@ r_notebook_execute <- function(
     capture <- r_notebook_install_knit_capture(
       runtime,
       cell_id,
-      generated_labels,
-      output_dir
+      generated_labels
     )
     base::on.exit(base::setHook(
       "rmarkdown.onKnit",
