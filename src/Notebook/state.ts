@@ -338,6 +338,23 @@ export async function writeNotebookStateFile(
     const data = await gzipAsync(JSON.stringify(serialized), { level: 9 });
     await fsPromises.writeFile(temporary, data, { flag: "wx" });
     await fsPromises.rename(temporary, destination);
+    // Remove unreferenced assets only after the new manifest is committed.
+    const referenced = new Set(serialized.cellOutputs.flatMap((cell) =>
+      cell.outputs.flatMap((output) =>
+        output.items.flatMap((item) => item.asset ? [item.asset] : [])
+      )
+    ));
+    try {
+      for (const name of await fsPromises.readdir(assetDirectory)) {
+        if (/^[a-f0-9]{64}\\.bin$/.test(name) && !referenced.has(name)) {
+          await fsPromises.rm(path.join(assetDirectory, name), { force: true });
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        // Asset cleanup is best-effort and must not turn a successful save into a failure.
+      }
+    }
   } finally {
     await fsPromises.rm(temporary, { force: true });
   }
