@@ -130,7 +130,7 @@ export class HiddenRProcess implements InlineRTransport {
       let output = "";
       let settled = false;
       const timeout = setTimeout(() => finish(undefined,
-        new Error("vscode-R sess attachment timed out.")), 5000);
+        new Error("vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent.")), 300000);
 
       const stopListening = (): void => {
         clearTimeout(timeout);
