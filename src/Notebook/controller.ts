@@ -571,10 +571,7 @@ export class RNotebookController implements vscode.Disposable {
         await session.bridge.viewObject(objectName);
       } finally {
         if (!session.stopped) {
-          await this.attachment.endExecution(
-            session.process,
-            this.synchronizeSessionRequests
-          );
+          await this.attachment.endExecution(session.process);
         }
       }
     });
