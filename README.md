@@ -68,7 +68,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 ## vscode-R Integration
 
 - Run inline code and display Markdown cells without the vscode-R session watcher.
-- Enable both settings to use vscode-R workspace, data, and help viewers:
+- Enable both settings to use vscode-R's managed `sess` session API for workspace, data, and help viewers:
 
   ```json
   "r.sessionWatcher": true,
@@ -76,6 +76,8 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
   ```
 
 - Reload the VS Code window after changing either setting.
+- The notebook uses `session.prepareAttachment()`, connection references, and `session.activate()` from a recent vscode-R build. It does not modify R libraries directly or source vscode-R's legacy session profiles. When the bundled `sess` revision is missing, vscode-R may request consent to install it in its managed library.
+- Run `r.sessionWatcher: true` with vscode-R 3.2.0-compatible sess attachment APIs. Disabling notebook integration still permits inline cell execution.
 - Disable `r.notebook.rExtensionIntegration` to run without vscode-R session integration.
 
 ## Configuration
