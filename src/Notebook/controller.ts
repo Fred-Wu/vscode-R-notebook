@@ -91,8 +91,6 @@ export class RNotebookController implements vscode.Disposable {
   constructor(
     private readonly helperPath: string,
     private readonly output: vscode.OutputChannel,
-    private readonly synchronizeSessionRequests: () => Promise<string | undefined>,
-    beginSessionAttachment: () => (processId: number) => Promise<void>,
     private readonly sessionIntegrationEnabled: boolean
   ) {
     this.attachment = new InlineSessCoordinator();
