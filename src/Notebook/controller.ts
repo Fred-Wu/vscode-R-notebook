@@ -175,8 +175,18 @@ export class RNotebookController implements vscode.Disposable {
       session,
       this.selectedNotebookKey === notebook.uri.toString()
     );
+    if (this.sessionIntegrationEnabled) await this.attachment.updateCells(session.process, notebook);
     if (refreshMarkdown) {
       this.markdownStateChanged.fire(notebook);
+    }
+  }
+
+  refreshCellBindings(notebook: vscode.NotebookDocument): void {
+    const session = this.sessions.get(notebook.uri.toString());
+    if (session && this.sessionIntegrationEnabled) {
+      void this.attachment.updateCells(session.process, notebook).catch((error: unknown) => {
+        this.output.appendLine(`[Session] Could not bind notebook cells: ${String(error)}`);
+      });
     }
   }
 
