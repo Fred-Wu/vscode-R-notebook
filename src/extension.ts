@@ -200,8 +200,6 @@ export function activate(context: vscode.ExtensionContext): void {
   controller = new RNotebookController(
     context.asAbsolutePath("resources/r/execute.R"),
     output,
-    () => Promise.resolve(undefined),
-    () => () => Promise.resolve(),
     vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
   const editing = new RNotebookEditing();
