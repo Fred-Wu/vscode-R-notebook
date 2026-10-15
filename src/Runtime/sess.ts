@@ -22,6 +22,8 @@ export interface VscodeRSessionApi {
   readonly onDidChangeSessionConnection: vscode.Event<SessConnectionChange>;
   getSessionReference(sessionId: string): SessReference | undefined;
   activate(sessionId: string, options?: { connectionId?: string; select?: boolean }): Promise<boolean>;
+  bindNotebookCell(sessionId: string, cellUri: vscode.Uri, connectionId: string): boolean;
+  unbindNotebookCell(cellUri: vscode.Uri): void;
 }
 
 export async function getVscodeRSessionApi(): Promise<VscodeRSessionApi> {
@@ -37,7 +39,9 @@ export async function getVscodeRSessionApi(): Promise<VscodeRSessionApi> {
     typeof session.prepareAttachment !== "function" ||
     typeof session.getSessionReference !== "function" ||
     typeof session.onDidChangeSessionConnection !== "function" ||
-    typeof session.activate !== "function") {
+    typeof session.activate !== "function" ||
+    typeof session.bindNotebookCell !== "function" ||
+    typeof session.unbindNotebookCell !== "function") {
     throw new Error("The installed vscode-R does not expose the sess attachment API. Update vscode-R.");
   }
   return session as VscodeRSessionApi;
@@ -46,6 +50,7 @@ export async function getVscodeRSessionApi(): Promise<VscodeRSessionApi> {
 /** Track consumer-owned R processes by the sess attachment/connection IDs. */
 export class InlineSessCoordinator implements vscode.Disposable {
   private readonly processes = new Set<HiddenRProcess>();
+  private readonly cells = new Map<HiddenRProcess, Set<string>>();
   private readonly connections = new Map<string, SessReference>();
   private preferred: HiddenRProcess | undefined;
   private suspended = false;
@@ -62,6 +67,7 @@ export class InlineSessCoordinator implements vscode.Disposable {
           if (!attachmentId) return;
           if (event.kind === "connected") {
             this.connections.set(attachmentId, event.session);
+            this.bindCellsForAttachment(attachmentId);
             if (this.preferred?.attachmentId === attachmentId && !this.suspended) {
               void this.activate(this.preferred).catch(() => undefined);
             }
@@ -79,6 +85,31 @@ export class InlineSessCoordinator implements vscode.Disposable {
       });
     }
     return this.sessionApi;
+  }
+
+  private bindCellsForAttachment(attachmentId: string): void {
+    for (const [process, cells] of this.cells) {
+      if (process.attachmentId !== attachmentId) continue;
+      const reference = this.connections.get(attachmentId);
+      if (!reference) continue;
+      void this.api().then((api) => {
+        if (api.getSessionReference(reference.sessionId)?.connectionId !== reference.connectionId) return;
+        for (const uri of cells) {
+          api.bindNotebookCell(reference.sessionId, vscode.Uri.parse(uri), reference.connectionId);
+        }
+      });
+    }
+  }
+
+  async updateCells(process: HiddenRProcess, notebook: vscode.NotebookDocument): Promise<void> {
+    const api = await this.api();
+    const current = new Set(notebook.getCells().filter(
+      (cell) => cell.kind === vscode.NotebookCellKind.Code && cell.document.languageId === "r"
+    ).map((cell) => cell.document.uri.toString()));
+    const previous = this.cells.get(process) ?? new Set<string>();
+    for (const uri of previous) if (!current.has(uri)) api.unbindNotebookCell(vscode.Uri.parse(uri));
+    this.cells.set(process, current);
+    if (process.attachmentId) this.bindCellsForAttachment(process.attachmentId);
   }
 
   private async activate(process: HiddenRProcess): Promise<void> {
@@ -164,6 +195,11 @@ export class InlineSessCoordinator implements vscode.Disposable {
 
   forget(process: HiddenRProcess): void {
     this.processes.delete(process);
+    const cells = this.cells.get(process);
+    this.cells.delete(process);
+    if (cells) void this.api().then((api) => {
+      for (const uri of cells) api.unbindNotebookCell(vscode.Uri.parse(uri));
+    });
     const id = process.attachmentId;
     if (id) this.connections.delete(id);
     if (this.preferred === process) this.preferred = undefined;
@@ -174,5 +210,6 @@ export class InlineSessCoordinator implements vscode.Disposable {
     this.connectionEvents?.dispose();
     this.connections.clear();
     this.processes.clear();
+    this.cells.clear();
   }
 }
