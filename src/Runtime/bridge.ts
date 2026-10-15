@@ -74,7 +74,7 @@ async function readPreview(requestDirectory: string, delivered: Set<string>, onO
     const metadata = parseMetadata(await fsPromises.readFile(path.join(requestDirectory, entry), "utf8"));
     const payloadPath = path.join(requestDirectory, metadata.file);
     if (path.dirname(payloadPath) !== requestDirectory ||
-      !/^p\d{6}\.txt$/.test(metadata.file)) throw new Error("Unsafe preview path.");
+      !/^p\d{6}\.(?:txt|png|svg)$/.test(metadata.file)) throw new Error("Unsafe preview path.");
     const output: BridgeOutput = { kind: metadata.kind, mime: metadata.mime,
       data: await fsPromises.readFile(payloadPath), name: metadata.name };
     await onOutput(output);
