@@ -348,7 +348,7 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
               output_handler[[type]] <- base::local({
                 native_handler <- handler
                 function(value, ...) {
-                  emit_preview(value)
+                  base::try(emit_preview(value), silent = TRUE)
                   native_handler(value, ...)
                 }
               })
@@ -413,8 +413,8 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
           for (figure in path) {
             if (base::file.exists(figure) &&
               base::grepl("\\.(png|svg)$", figure, ignore.case = TRUE)) {
-              emit_preview_file(figure, if (base::grepl("\\.svg$", figure, ignore.case = TRUE))
-                "image/svg+xml" else "image/png")
+              base::try(emit_preview_file(figure, if (base::grepl("\\.svg$", figure, ignore.case = TRUE))
+                "image/svg+xml" else "image/png"), silent = TRUE)
             }
           }
         }
