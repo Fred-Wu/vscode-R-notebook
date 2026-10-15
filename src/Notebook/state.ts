@@ -346,7 +346,7 @@ export async function writeNotebookStateFile(
     ));
     try {
       for (const name of await fsPromises.readdir(assetDirectory)) {
-        if (/^[a-f0-9]{64}\\.bin$/.test(name) && !referenced.has(name)) {
+        if (/^[a-f0-9]{64}\.bin$/.test(name) && !referenced.has(name)) {
           await fsPromises.rm(path.join(assetDirectory, name), { force: true });
         }
       }
