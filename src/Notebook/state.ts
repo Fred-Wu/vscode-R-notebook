@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { gunzipSync, gzip } from "node:zlib";
+import { promisify } from "node:util";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+
+const gzipAsync = promisify(gzip);
 import { codeCellSource, parseDocument } from "./document";
 import { codeCellLabel } from "./options";
 
@@ -197,15 +202,17 @@ export function reconcileNotebookState(
 
   matchUnique("label");
   matchUnique("sourceHash");
+  // Retain positional matching only for cells whose relative placement is
+  // unambiguous. Do not attach a removed cell's output to newly inserted code.
   const remainingOld = oldCode.filter((cell) => !mapped.has(cell.index));
   const remainingNew = newCode.filter((cell) => !usedNew.has(cell.index));
-  if (remainingOld.length === remainingNew.length) {
-    remainingOld.forEach((cell, index) => {
-      const replacement = remainingNew[index];
-      if (replacement) {
-        mapped.set(cell.index, replacement.index);
-      }
-    });
+  if (remainingOld.length === 1 && remainingNew.length === 1) {
+    const previous = remainingOld[0];
+    const current = remainingNew[0];
+    if (previous && current && previous.index === current.index &&
+      state.cells.length === cells.length) {
+      mapped.set(previous.index, current.index);
+    }
   }
 
   const cellOutputs = state.cellOutputs.flatMap((output) => {
@@ -258,8 +265,16 @@ export async function writeNotebookStateFile(
   documentPath: string,
   state: NotebookState
 ): Promise<void> {
-  await fsPromises.writeFile(
-    `${documentPath}.r-notebook`,
-    gzipSync(JSON.stringify(state), { level: 9 })
+  const destination = `${documentPath}.r-notebook`;
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.${randomUUID()}.tmp`
   );
+  try {
+    const data = await gzipAsync(JSON.stringify(state), { level: 9 });
+    await fsPromises.writeFile(temporary, data, { flag: "wx" });
+    await fsPromises.rename(temporary, destination);
+  } finally {
+    await fsPromises.rm(temporary, { force: true });
+  }
 }
