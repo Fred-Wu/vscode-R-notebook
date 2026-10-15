@@ -34,6 +34,8 @@ interface RefreshRequest {
 const renderedSignatures = new WeakMap<HTMLElement, string>();
 let responseApplication = Promise.resolve();
 let headScriptsLoaded = false;
+let lastNativeHtml: string | undefined;
+let lastNativeDocument: Document | undefined;
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -136,7 +138,13 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     return;
   }
 
-  const nativeDocument = new DOMParser().parseFromString(response.html, "text/html");
+  // Multiple markup cells receive the same native document. Parse it once per
+  // document revision instead of reparsing the full HTML for every cell.
+  if (lastNativeHtml !== response.html || !lastNativeDocument) {
+    lastNativeHtml = response.html;
+    lastNativeDocument = new DOMParser().parseFromString(response.html, "text/html");
+  }
+  const nativeDocument = lastNativeDocument;
   const nativeCell = nativeDocument.getElementById(response.marker);
   if (!nativeCell) {
     placeholder.title = "The native text output did not contain this Markdown cell.";
