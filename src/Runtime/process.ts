@@ -25,6 +25,8 @@ export interface HiddenRLaunchOptions {
   interrupt?: (processId: number) => Promise<void>;
   initialization?: {
     command: string;
+    attachmentId: string;
+    preparation: { dispose(): void };
     successMarker: string;
     failureMarker: string;
   };
@@ -89,6 +91,10 @@ export class HiddenRProcess implements InlineRTransport {
     private readonly runningChanged: (running: boolean) => void = () => undefined
   ) {}
 
+  get attachmentId(): string | undefined {
+    return this.currentInitialization?.attachmentId;
+  }
+
   get processId(): number | undefined {
     const child = this.child;
     return child && isRunning(child)
@@ -106,6 +112,7 @@ export class HiddenRProcess implements InlineRTransport {
       this.child = undefined;
       this.currentInterruption = undefined;
       this.currentLaunchOptions = undefined;
+      this.currentInitialization?.preparation.dispose();
       this.currentInitialization = undefined;
       this.rProcessId = undefined;
       this.ready = false;
@@ -269,6 +276,7 @@ export class HiddenRProcess implements InlineRTransport {
         this.rProcessId = await this.initialize(child, options.initialization);
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
+        options.initialization.preparation.dispose();
         this.clearProcess(child);
         if (isRunning(child)) {
           child.kill();
@@ -453,6 +461,7 @@ export class HiddenRProcess implements InlineRTransport {
     this.child = undefined;
     this.currentInterruption = undefined;
     this.currentLaunchOptions = undefined;
+    this.currentInitialization?.preparation.dispose();
     this.currentInitialization = undefined;
     this.rProcessId = undefined;
     this.ready = false;
