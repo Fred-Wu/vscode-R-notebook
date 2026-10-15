@@ -421,11 +421,13 @@ export class RNotebookController implements vscode.Disposable {
     }
     const renderKey = `${sourceHash}:${session.textRevision}`;
     if (session.pendingTextRender?.key === renderKey) {
+      // One native render serves all markup cells. Only its first response
+      // should request reloading document-level scripts.
       return session.pendingTextRender.promise.then((html) => ({
         html,
         marker: target.marker,
         cells,
-        newDocument: true,
+        newDocument: false,
       }));
     }
     session.pendingTextRender?.cancellation.cancel();
