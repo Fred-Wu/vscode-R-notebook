@@ -195,3 +195,30 @@ test("does not reassign deleted-cell output to an inserted cell", () => {
   };
   assert.equal(reconcileNotebookState(after, state).cellOutputs.length, 0);
 });
+
+test("externalizes large output assets and restores their bytes", async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-large-output-"));
+  t.after(() => fsPromises.rm(directory, { recursive: true, force: true }));
+  const documentPath = path.join(directory, "plots.qmd");
+  const source = "```{r}\nplot(1:10)\n```\n";
+  const data = Buffer.alloc(160 * 1024, 71).toString("base64");
+  const state: NotebookState = {
+    version: 1,
+    sourceHash: notebookSourceHash(source),
+    cells: storedCells(source),
+    cellOutputs: [{
+      cell: 0,
+      sourceHash: storedCells(source)[0]!.sourceHash,
+      outputs: [{ items: [{ mime: "image/png", data }] }],
+    }],
+  };
+  await writeNotebookStateFile(documentPath, state);
+  const payload = JSON.parse(gunzipSync(await fsPromises.readFile(
+    `${documentPath}.r-notebook`
+  )).toString("utf8")) as NotebookState;
+  assert.equal(payload.cellOutputs[0]?.outputs[0]?.items[0]?.data, "");
+  const asset = payload.cellOutputs[0]?.outputs[0]?.items[0]?.asset;
+  assert.match(asset ?? "", /^[a-f0-9]{64}\.bin$/);
+  const restored = await readNotebookStateFile(documentPath);
+  assert.equal(restored?.cellOutputs[0]?.outputs[0]?.items[0]?.data, data);
+});
