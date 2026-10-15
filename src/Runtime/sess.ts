@@ -98,6 +98,42 @@ export class InlineSessCoordinator implements vscode.Disposable {
     this.processes.add(process);
     if (makePreferred) this.preferred = process;
     await process.start();
+    const attachmentId = process.attachmentId;
+    if (!attachmentId) {
+      throw new Error("The notebook R process started without a managed sess attachment.");
+    }
+    // R's startup marker alone is insufficient: ensure vscode-R accepted the
+    // connection and published the matching attachment reference.
+    const api = await this.api();
+    const connected = () => {
+      const reference = this.connections.get(attachmentId);
+      const current = reference && api.getSessionReference(reference.sessionId);
+      return Boolean(current && current.attachmentId === attachmentId &&
+        current.connectionId === reference?.connectionId);
+    };
+    if (!connected()) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          subscription.dispose();
+          reject(new Error("vscode-R did not confirm the notebook sess connection."));
+        }, 15000);
+        const subscription = api.onDidChangeSessionConnection((event) => {
+          if (event.kind === "connected" && event.session.attachmentId === attachmentId) {
+            this.connections.set(attachmentId, event.session);
+            if (connected()) {
+              clearTimeout(timeout);
+              subscription.dispose();
+              resolve();
+            }
+          }
+        });
+        if (connected()) {
+          clearTimeout(timeout);
+          subscription.dispose();
+          resolve();
+        }
+      });
+    }
     await this.activate(process);
   }
 
