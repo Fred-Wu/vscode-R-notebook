@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type * as vscode from "vscode";
-import { RExecutionBridge } from "../../src/Runtime/bridge";
+import { RExecutionBridge, waitForDone } from "../../src/Runtime/bridge";
 import type { InlineDispatch, InlineRTransport } from "../../src/Runtime/process";
 
 const neverCancelled = {
@@ -131,4 +131,18 @@ test("streams published previews before the final done marker", async (t) => {
   const result = await running;
   assert.deepEqual(previews, ["partial"]);
   assert.equal(Buffer.from(result.outputs[0]?.data ?? []).toString("utf8"), "final");
+});
+
+test("completes after a done marker even without relying on a rename event", async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-done-"));
+  t.after(() => fsPromises.rm(directory, { recursive: true, force: true }));
+  const completion = waitForDone(directory);
+  t.after(() => completion.dispose());
+  await fsPromises.writeFile(path.join(directory, "done"), "true\n");
+  await Promise.race([
+    completion.promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("done marker was not observed")), 2500)
+    ),
+  ]);
 });
