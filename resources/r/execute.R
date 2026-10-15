@@ -253,7 +253,23 @@ r_notebook_compact_data_frame_source <- function(source) {
   !function_name %in% c("head", "tail")
 }
 
-r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) {
+r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, output_dir = NULL) {
+  preview_index <- 0L
+  emit_preview <- function(value) {
+    if (base::is.null(output_dir) || !base::length(value)) return(base::invisible())
+    text <- base::paste0(base::as.character(value), collapse = "")
+    if (!base::nzchar(text)) return(base::invisible())
+    preview_index <<- preview_index + 1L
+    name <- base::sprintf("p%06d", preview_index)
+    base::writeChar(text, base::file.path(output_dir, base::paste0(name, ".txt")),
+      eos = NULL, useBytes = TRUE)
+    metadata <- base::file.path(output_dir, base::paste0(".", name, ".meta.tmp"))
+    base::writeLines(c("kind: display", "mime: text/plain",
+      base::paste0("file: ", name, ".txt")), metadata, useBytes = TRUE)
+    if (!base::file.rename(metadata, base::file.path(output_dir,
+      base::paste0(name, ".meta")))) base::stop("Could not publish notebook preview.")
+    base::invisible()
+  }
   previous_labels <- runtime$cell_labels[[cell_id]]
   if (base::is.null(previous_labels)) {
     previous_labels <- base::character()
@@ -306,6 +322,20 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
         arguments <- list(...)
         render_state$compact_data_frame <- TRUE
         output_handler <- arguments$output_handler
+        if (base::inherits(output_handler, "output_handler")) {
+          for (type in c("text", "message", "warning")) {
+            handler <- output_handler[[type]]
+            if (base::is.function(handler)) {
+              output_handler[[type]] <- base::local({
+                native_handler <- handler
+                function(value, ...) {
+                  emit_preview(value)
+                  native_handler(value, ...)
+                }
+              })
+            }
+          }
+        }
         if (
           base::inherits(output_handler, "output_handler") &&
             base::is.function(output_handler$source)
@@ -1273,7 +1303,8 @@ r_notebook_execute <- function(
     capture <- r_notebook_install_knit_capture(
       runtime,
       cell_id,
-      generated_labels
+      generated_labels,
+      output_dir
     )
     base::on.exit(base::setHook(
       "rmarkdown.onKnit",
