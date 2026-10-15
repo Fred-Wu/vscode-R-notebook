@@ -255,6 +255,25 @@ r_notebook_compact_data_frame_source <- function(source) {
 
 r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, output_dir = NULL) {
   preview_index <- 0L
+  emit_preview_file <- function(filename, mime) {
+    if (base::is.null(output_dir) || !base::file.exists(filename)) {
+      return(base::invisible())
+    }
+    preview_index <<- preview_index + 1L
+    name <- base::sprintf("p%06d", preview_index)
+    extension <- if (base::identical(mime, "image/svg+xml")) ".svg" else ".png"
+    payload <- base::paste0(name, extension)
+    if (!base::file.copy(filename, base::file.path(output_dir, payload), overwrite = TRUE)) {
+      return(base::invisible())
+    }
+    metadata <- base::file.path(output_dir, base::paste0(".", name, ".meta.tmp"))
+    base::writeLines(c("kind: display", base::paste0("mime: ", mime),
+      base::paste0("file: ", payload)), metadata, useBytes = TRUE)
+    if (!base::file.rename(metadata, base::file.path(output_dir, base::paste0(name, ".meta")))) {
+      base::stop("Could not publish notebook plot preview.")
+    }
+    base::invisible()
+  }
   emit_preview <- function(value) {
     if (base::is.null(output_dir) || !base::length(value)) return(base::invisible())
     text <- base::paste0(base::as.character(value), collapse = "")
@@ -390,6 +409,15 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
         ""
       }
       plot_wrapper <- function(path, options) {
+        if (base::is.character(path)) {
+          for (figure in path) {
+            if (base::file.exists(figure) &&
+              base::grepl("\\.(png|svg)$", figure, ignore.case = TRUE)) {
+              emit_preview_file(figure, if (base::grepl("\\.svg$", figure, ignore.case = TRUE))
+                "image/svg+xml" else "image/png")
+            }
+          }
+        }
         device_width <- tryCatch(
           grDevices::dev.size("in")[[1L]],
           error = function(error) NA_real_
