@@ -274,19 +274,16 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
     }
     base::invisible()
   }
-  emit_preview <- function(value, mime = "text/plain") {
+  emit_preview <- function(value) {
     if (base::is.null(output_dir) || !base::length(value)) return(base::invisible())
     text <- base::paste0(base::as.character(value), collapse = "")
-    if (!base::nzchar(text) || (base::identical(mime, "text/plain") && base::grepl(
-      "<(?:table|style|div|html|script|svg)(?:[[:space:]>])",
-      text, ignore.case = TRUE, perl = TRUE
-    ))) return(base::invisible())
+    if (!base::nzchar(text)) return(base::invisible())
     preview_index <<- preview_index + 1L
     name <- base::sprintf("p%06d", preview_index)
     base::writeChar(text, base::file.path(output_dir, base::paste0(name, ".txt")),
       eos = NULL, useBytes = TRUE)
     metadata <- base::file.path(output_dir, base::paste0(".", name, ".meta.tmp"))
-    base::writeLines(c("kind: display", base::paste0("mime: ", mime),
+    base::writeLines(c("kind: display", "mime: text/plain",
       base::paste0("file: ", name, ".txt")), metadata, useBytes = TRUE)
     if (!base::file.rename(metadata, base::file.path(output_dir,
       base::paste0(name, ".meta")))) base::stop("Could not publish notebook preview.")
@@ -318,12 +315,10 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, 
       render_state$compact_data_frame <- TRUE
       if (base::is.environment(render_context)) {
         render_context$df_print <- function(value) {
-          rendered <- r_notebook_compact_data_frame(
+          r_notebook_compact_data_frame(
             value,
             compact = render_state$compact_data_frame
           )
-          base::try(emit_preview(base::as.character(rendered), "text/html"), silent = TRUE)
-          rendered
         }
       }
       previous_evaluate <- knitr::knit_hooks$get("evaluate")
