@@ -543,6 +543,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (hasUnpreparedCell) {
         prepareNotebook(notebook);
       }
+      if (contentChanges.length > 0) controller.refreshCellBindings(notebook);
       const codeOptionsChanged = controller.markdownCodeOptionsChanged(notebook);
       if (contentChanges.length > 0 || codeOptionsChanged) {
         void controller.refreshMarkdown(notebook).catch((error: unknown) => {
