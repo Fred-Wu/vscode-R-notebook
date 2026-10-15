@@ -260,7 +260,8 @@ export class RExecutionBridge {
   constructor(
     private readonly helperPath: string,
     private readonly transport: InlineRTransport,
-    private readonly configuredQuartoExecutable?: () => string
+    private readonly configuredQuartoExecutable?: () => string,
+    private readonly log: (message: string) => void = () => undefined
   ) {}
 
   async execute(
@@ -340,9 +341,11 @@ export class RExecutionBridge {
       if (token.isCancellationRequested) {
         return { success: false, outputs: [] };
       }
+      this.log(`Executing notebook request: ${requestPath}`);
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
+      this.log("Notebook request sent to R; awaiting completion marker.");
       const interrupt = (): void => {
         if (cancelled) {
           return;
@@ -355,6 +358,10 @@ export class RExecutionBridge {
       if (token.isCancellationRequested) {
         interrupt();
       }
+      const reportDelay = setTimeout(() => {
+        this.log(`Notebook request is still running; checking R execution and ${path.join(requestDirectory, "done")}`);
+      }, 10000);
+      try {
       if (onOutput) {
         let completed = false;
         let previewFailure: unknown;
@@ -382,10 +389,14 @@ export class RExecutionBridge {
       } else {
         await Promise.race([completion.promise, dispatch.failure, interruptFailure]);
       }
+      } finally {
+        clearTimeout(reportDelay);
+      }
       if (cancelled) {
         await interruptCompletion;
         return { success: false, outputs: [] };
       }
+      this.log("Notebook execution completed; reading final outputs.");
       return await readResult(requestDirectory);
     } finally {
       cancellation?.dispose();
