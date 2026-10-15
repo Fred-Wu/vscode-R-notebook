@@ -205,18 +205,10 @@ export function reconcileNotebookState(
 
   matchUnique("label");
   matchUnique("sourceHash");
-  // Retain positional matching only for cells whose relative placement is
-  // unambiguous. Do not attach a removed cell's output to newly inserted code.
-  const remainingOld = oldCode.filter((cell) => !mapped.has(cell.index));
-  const remainingNew = newCode.filter((cell) => !usedNew.has(cell.index));
-  if (remainingOld.length === 1 && remainingNew.length === 1) {
-    const previous = remainingOld[0];
-    const current = remainingNew[0];
-    if (previous && current && previous.index === current.index &&
-      state.cells.length === cells.length) {
-      mapped.set(previous.index, current.index);
-    }
-  }
+  // Never infer cell identity solely from its position. A deleted code cell
+  // replaced by a new one at the same index must not inherit its outputs.
+  // Edited labeled cells already match on label; unchanged cells on hash.
+
 
   const cellOutputs = state.cellOutputs.flatMap((output) => {
     const nextCell = mapped.get(output.cell);
