@@ -25,6 +25,8 @@ export interface HiddenRLaunchOptions {
   interrupt?: (processId: number) => Promise<void>;
   initialization?: {
     command: string;
+    attachmentId?: string;
+    preparation?: { dispose(): void };
     successMarker: string;
     failureMarker: string;
   };
@@ -89,6 +91,10 @@ export class HiddenRProcess implements InlineRTransport {
     private readonly runningChanged: (running: boolean) => void = () => undefined
   ) {}
 
+  get attachmentId(): string | undefined {
+    return this.currentInitialization?.attachmentId;
+  }
+
   get processId(): number | undefined {
     const child = this.child;
     return child && isRunning(child)
@@ -106,6 +112,7 @@ export class HiddenRProcess implements InlineRTransport {
       this.child = undefined;
       this.currentInterruption = undefined;
       this.currentLaunchOptions = undefined;
+      this.currentInitialization?.preparation?.dispose();
       this.currentInitialization = undefined;
       this.rProcessId = undefined;
       this.ready = false;
@@ -122,8 +129,11 @@ export class HiddenRProcess implements InlineRTransport {
     return new Promise((resolve, reject) => {
       let output = "";
       let settled = false;
+      const timeout = setTimeout(() => finish(undefined,
+        new Error("vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent.")), 300000);
 
       const stopListening = (): void => {
+        clearTimeout(timeout);
         child.stdout.off("data", onData);
         child.stdin.off("error", onInputError);
         child.off("error", onError);
@@ -144,7 +154,7 @@ export class HiddenRProcess implements InlineRTransport {
         }
       };
       const onData = (data: Buffer): void => {
-        output += data.toString("utf8");
+        output = (output + data.toString("utf8")).slice(-16384);
         const successStart = output.indexOf(initialization.successMarker);
         if (successStart >= 0) {
           const processIdStart = successStart + initialization.successMarker.length;
@@ -269,10 +279,9 @@ export class HiddenRProcess implements InlineRTransport {
         this.rProcessId = await this.initialize(child, options.initialization);
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
+        options.initialization.preparation?.dispose();
         this.clearProcess(child);
-        if (isRunning(child)) {
-          child.kill();
-        }
+        if (isRunning(child)) child.kill();
         throw error;
       }
     }
@@ -453,6 +462,7 @@ export class HiddenRProcess implements InlineRTransport {
     this.child = undefined;
     this.currentInterruption = undefined;
     this.currentLaunchOptions = undefined;
+    this.currentInitialization?.preparation?.dispose();
     this.currentInitialization = undefined;
     this.rProcessId = undefined;
     this.ready = false;

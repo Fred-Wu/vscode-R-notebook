@@ -67,7 +67,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 ## vscode-R Integration
 
 - Run inline code and display Markdown cells without the vscode-R session watcher.
-- Enable both settings to use vscode-R workspace, data, and help viewers:
+- Enable both settings to use vscode-R's managed `sess` API for workspace, data, and help viewers:
 
   ```json
   "r.sessionWatcher": true,
@@ -75,9 +75,25 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
   ```
 
 - Reload the VS Code window after changing either setting.
+- Notebook session attachment uses vscode-R's public `session.prepareAttachment()` and `session.activate()` APIs, with its managed `sess` package. First-time installation may require consent.
+- Use a vscode-R version supporting these APIs (v3.2.0 or later).
 - Disable `r.notebook.rExtensionIntegration` to run without vscode-R session integration.
 
 ## Configuration
+
+R code cells use the R `languageserver` package for completion, hover, signature help,
+diagnostics, navigation, rename, formatting and other supported LSP features. Install
+it in the configured R environment with `install.packages("languageserver")`.
+The notebook starts a separate language-server process for each open notebook and
+stops it when the notebook closes. It uses vscode-R's R executable resolver and the
+`r.lsp.args`, `r.lsp.lang`, `r.lsp.debug`, `r.lsp.diagnostics`, `r.libPaths` and
+`r.useRenvLibPath` settings. Set `r.lsp.enabled` to `false`
+to disable it. Language features do not require the notebook's execution session
+to be attached. Startup errors appear in **R Notebook Language Server** output.
+Cells use the **R (Notebook)** language mode, sharing vscode-R's R syntax grammar.
+This keeps notebook requests separate from vscode-R's text-editor providers;
+saved documents still contain ordinary `{r}` chunks. Editor settings specific to
+this mode can be placed under `[r-notebook-r]`.
 
 | Setting                                     | Default | Purpose                                                    |
 | ------------------------------------------- | ------- | ---------------------------------------------------------- |
@@ -98,6 +114,13 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - `bookdown` when required — Supports `bookdown::` R Markdown formats.
 
 ## Development Note
+
+Run `npm run test:integration` to test the language service in an isolated VS Code
+profile using the installed R extensions and a real R language server. Set
+`VSCODE_EXECUTABLE` to the VS Code executable (for example, `Code.exe` on Windows).
+Optionally set `R_EXECUTABLE` and `VSCODE_EXTENSIONS_DIR`. The test covers `.rmd`
+and `.qmd` cells, edits, language features, URI mapping and ordinary R documents.
+Set `R_LSP_MULTI_SERVER=true` to also exercise vscode-R's multiple-server mode.
 
 This extension's source code was written with assistance from GPT models using OpenAI's Codex. The overall feature design and logic decisions are mine; GPT models were used to generate and iterate on the implementation.
 

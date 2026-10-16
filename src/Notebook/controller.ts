@@ -3,6 +3,8 @@ import { TextDecoder } from "node:util";
 import * as vscode from "vscode";
 import {
   NOTEBOOK_TYPE,
+  R_CELL_LANGUAGE,
+  isRLanguage,
   NATIVE_TEXT_VERSION,
   codeCellSource,
   serializeDocument,
@@ -19,13 +21,12 @@ import {
   type BridgeOutput,
 } from "../Runtime/bridge";
 import { type HiddenRProcess } from "../Runtime/process";
-import { InlineAttachmentCoordinator } from "../Runtime/attachment";
+import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
   quartoExecutableSetting,
 } from "../Runtime/launch";
 import type { RConsoleTransport } from "../Runtime/console";
-import type { VscodeRSessionRequest } from "../Runtime/vscodeR";
 import { isQuartoNotebook } from "../notebookFile";
 
 interface NotebookSession {
@@ -56,7 +57,7 @@ type TextRenderResult = {
 function assertRCell(cell: vscode.NotebookCell): void {
   const metadata = cell.metadata as RNotebookCellMetadata;
   const engine = metadata.rNotebook?.engine ?? cell.document.languageId;
-  if (engine.toLowerCase() !== "r" || cell.document.languageId !== "r") {
+  if (!isRLanguage(engine.toLowerCase()) || !isRLanguage(cell.document.languageId)) {
     throw new Error(`The R notebook kernel cannot execute '${engine}' cells.`);
   }
 }
@@ -77,7 +78,7 @@ function bridgeOutputToNotebook(output: BridgeOutput): vscode.NotebookCellOutput
 export class RNotebookController implements vscode.Disposable {
   private readonly controller: vscode.NotebookController;
   private readonly sessions = new Map<string, NotebookSession>();
-  private readonly attachment: InlineAttachmentCoordinator;
+  private readonly attachment: InlineSessCoordinator;
   private readonly markdownStateChanged = new vscode.EventEmitter<vscode.NotebookDocument>();
   readonly onDidChangeMarkdownState = this.markdownStateChanged.event;
   private readonly notebookStateChanged = new vscode.EventEmitter<vscode.NotebookDocument>();
@@ -91,17 +92,15 @@ export class RNotebookController implements vscode.Disposable {
   constructor(
     private readonly helperPath: string,
     private readonly output: vscode.OutputChannel,
-    private readonly synchronizeSessionRequests: () => Promise<string | undefined>,
-    beginSessionAttachment: () => (processId: number) => Promise<void>,
     private readonly sessionIntegrationEnabled: boolean
   ) {
-    this.attachment = new InlineAttachmentCoordinator(beginSessionAttachment);
+    this.attachment = new InlineSessCoordinator();
     this.controller = vscode.notebooks.createNotebookController(
       "r-notebook-inline",
       NOTEBOOK_TYPE,
       "R Notebook"
     );
-    this.controller.supportedLanguages = ["r"];
+    this.controller.supportedLanguages = [R_CELL_LANGUAGE, "r"];
     this.controller.supportsExecutionOrder = true;
     this.controller.executeHandler = (cells) => this.execute(cells);
   }
@@ -459,10 +458,7 @@ export class RNotebookController implements vscode.Disposable {
         return html;
       } finally {
         if (!session.stopped) {
-          await this.attachment.endExecution(
-            session.process,
-            this.synchronizeSessionRequests
-          );
+          await this.attachment.endExecution(session.process);
         }
       }
     });
@@ -572,10 +568,7 @@ export class RNotebookController implements vscode.Disposable {
         await session.bridge.viewObject(objectName);
       } finally {
         if (!session.stopped) {
-          await this.attachment.endExecution(
-            session.process,
-            this.synchronizeSessionRequests
-          );
+          await this.attachment.endExecution(session.process);
         }
       }
     });
@@ -635,10 +628,6 @@ export class RNotebookController implements vscode.Disposable {
         await this.attachment.select(selectedSession?.process);
       }
     }
-  }
-
-  handleVscodeRSessionRequest(request: VscodeRSessionRequest): Promise<void> {
-    return this.attachment.handleSessionRequest(request);
   }
 
   private async executeCell(
@@ -708,10 +697,7 @@ export class RNotebookController implements vscode.Disposable {
       } finally {
         if (!session.stopped) {
           try {
-            await this.attachment.endExecution(
-              session.process,
-              this.synchronizeSessionRequests
-            );
+            await this.attachment.endExecution(session.process);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.output.appendLine(

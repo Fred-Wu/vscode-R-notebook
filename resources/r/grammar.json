@@ -1,0 +1,4 @@
+{
+  "scopeName": "source.r.notebook",
+  "patterns": [{ "include": "source.r" }]
+}

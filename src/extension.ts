@@ -13,6 +13,7 @@ import {
   removeHeaderLabelShadowedByPipe,
 } from "./Notebook/options";
 import { RNotebookMarkdownCompletionProvider } from "./Notebook/markdownCompletions";
+import { RNotebookLanguageService } from "./Notebook/languageService";
 import { RMarkdownCellStatusBarProvider } from "./Notebook/statusBar";
 import { RNotebookSerializer } from "./Notebook/serializer";
 import {
@@ -24,15 +25,12 @@ import {
 import { TextRenderCancelledError } from "./Runtime/bridge";
 import { RConsoleTransport } from "./Runtime/console";
 import {
-  isVscodeRWorkingDirectoryAccepted,
-  VscodeRSessionRequestWatcher,
-} from "./Runtime/vscodeR";
-import {
   isQuartoNotebook,
   normalizeNotebookExtension,
 } from "./notebookFile";
 
 const stateSaves = new Map<string, Promise<void>>();
+let languageService: RNotebookLanguageService | undefined;
 
 function isNotebookCell(value: unknown): value is vscode.NotebookCell {
   return Boolean(
@@ -201,40 +199,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const notebookRExtensionIntegrationEnabled = vscode.workspace
     .getConfiguration("r.notebook")
     .get<boolean>("rExtensionIntegration", true);
-  const sessionRequestWatcher = vscodeRSessionWatcherEnabled
-    ? new VscodeRSessionRequestWatcher(
-      async (request) => {
-        const workspaceDirectories = vscode.workspace.workspaceFolders?.map(
-          (folder) => folder.uri.fsPath
-        );
-        if (
-          isVscodeRWorkingDirectoryAccepted(
-            request.workingDirectory,
-            workspaceDirectories
-          )
-        ) {
-          await controller.handleVscodeRSessionRequest(request);
-          return true;
-        }
-        return false;
-      },
-      (message) => output.appendLine(message)
-    )
-    : undefined;
   controller = new RNotebookController(
     context.asAbsolutePath("resources/r/execute.R"),
     output,
-    () => sessionRequestWatcher?.synchronize() ?? Promise.resolve(undefined),
-    () => {
-      if (!sessionRequestWatcher) {
-        return async () => undefined;
-      }
-      const attachmentCheckpoint = sessionRequestWatcher.attachmentCheckpoint();
-      return (processId) => sessionRequestWatcher.waitForAttachment(
-        processId,
-        attachmentCheckpoint
-      );
-    },
     vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
   const editing = new RNotebookEditing();
@@ -246,6 +213,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const optionCompletions = new CellOptionCompletionProvider(output);
   const markdownCompletions = new RNotebookMarkdownCompletionProvider(output);
+  languageService = new RNotebookLanguageService(context.asAbsolutePath("resources/r/language_server.R"));
   const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
   );
@@ -315,6 +283,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: "markdown", notebookType: NOTEBOOK_TYPE },
       markdownCompletions
     ),
+    languageService,
     vscode.notebooks.registerNotebookCellStatusBarItemProvider(
       NOTEBOOK_TYPE,
       cellStatusBar
@@ -712,9 +681,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
-  if (sessionRequestWatcher) {
-    context.subscriptions.push(sessionRequestWatcher);
-  }
 
   for (const notebook of vscode.workspace.notebookDocuments) {
     if (notebook.notebookType !== NOTEBOOK_TYPE) {
@@ -737,6 +703,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  await languageService?.stop();
   while (stateSaves.size > 0) {
     await Promise.all(stateSaves.values());
   }
