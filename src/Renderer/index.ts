@@ -4,6 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
+import { isCurrentTextResponse } from "./textResult";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -160,7 +161,10 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     )) {
       // A response belongs to one request. Applying its document-wide HTML
       // to sibling cells can overwrite edits whose newer requests are pending.
-      if (element !== placeholder) {
+      if (!isCurrentTextResponse(
+        element.dataset.rNotebookTextRequest,
+        response.requestId
+      )) {
         continue;
       }
       const encodedId = element.dataset.rNotebookMarkupId;
