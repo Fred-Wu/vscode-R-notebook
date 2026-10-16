@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { isTextRenderDependency } from "./Notebook/renderDependencies";
 import {
   NOTEBOOK_TYPE,
   type RNotebookCellMetadata,
@@ -217,6 +218,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
   );
+  const renderDependencyWatcher = vscode.workspace.createFileSystemWatcher(
+    "**/*.{bib,csl,css,scss,md,markdown,html,htm,js,svg}"
+  );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
     (notebookUri, documentKind) =>
@@ -243,6 +247,21 @@ export function activate(context: vscode.ExtensionContext): void {
         });
       }
     });
+  };
+  const refreshRenderDependency = (uri: vscode.Uri): void => {
+    if (!isTextRenderDependency(uri.fsPath)) {
+      return;
+    }
+    for (const notebook of vscode.workspace.notebookDocuments) {
+      if (notebook.notebookType !== NOTEBOOK_TYPE ||
+          notebook.uri.scheme !== "file") {
+        continue;
+      }
+      void controller.refreshMarkdown(notebook).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[Markdown] Could not refresh dependent resources: ${message}`);
+      });
+    }
   };
   vscode.workspace.notebookDocuments.forEach((notebook) =>
     markdownCompletions.prepareQuarto(notebook)
@@ -276,6 +295,10 @@ export function activate(context: vscode.ExtensionContext): void {
     cellStatusBar,
     markdownCompletions,
     yamlWatcher,
+    renderDependencyWatcher,
+    renderDependencyWatcher.onDidChange(refreshRenderDependency),
+    renderDependencyWatcher.onDidCreate(refreshRenderDependency),
+    renderDependencyWatcher.onDidDelete(refreshRenderDependency),
     yamlWatcher.onDidChange(refreshYamlDependencies),
     yamlWatcher.onDidCreate(refreshYamlDependencies),
     yamlWatcher.onDidDelete(refreshYamlDependencies),
