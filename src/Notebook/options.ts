@@ -160,7 +160,14 @@ export function quartoOptionFields(source: string): QuartoOptionFields {
   for (const line of quartoOptionLines(source)) {
     const match = /^\s*label\s*:\s*(.*)$/i.exec(line);
     if (match && !label) {
-      label = match[1] ?? "";
+      const rawLabel = match[1] ?? "";
+      try {
+        const parsed = loadYaml(rawLabel, { schema: cellOptionYamlSchema });
+        label = typeof parsed === "string" ? parsed : rawLabel.trim();
+      } catch {
+        // Preserve incomplete values while users are editing options.
+        label = rawLabel.trim();
+      }
     } else {
       options.push(line);
     }

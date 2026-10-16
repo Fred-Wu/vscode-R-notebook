@@ -158,6 +158,11 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     for (const element of root.querySelectorAll<HTMLElement>(
       "[data-r-notebook-markup-id]"
     )) {
+      // A response belongs to one request. Applying its document-wide HTML
+      // to sibling cells can overwrite edits whose newer requests are pending.
+      if (element !== placeholder) {
+        continue;
+      }
       const encodedId = element.dataset.rNotebookMarkupId;
       const cell = encodedId ? cellsById.get(encodedId) : undefined;
       if (!cell) {
