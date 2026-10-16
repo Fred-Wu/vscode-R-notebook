@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   defaultChunk,
+  R_CELL_LANGUAGE,
   parseDocument,
   serializeDocument,
   type ParsedCell,
 } from "../../src/Notebook/document";
+
+test("notebook editor language saves as an ordinary R chunk", () => {
+  assert.equal(serializeDocument([{
+    kind: "code", value: "x <- 1", languageId: R_CELL_LANGUAGE,
+  }], "\n"), "```{r}\nx <- 1\n```");
+});
 
 test("parses R Markdown chunks and round trips without changing bytes", () => {
   const source = [

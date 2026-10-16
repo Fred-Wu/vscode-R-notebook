@@ -3,6 +3,8 @@ import { TextDecoder } from "node:util";
 import * as vscode from "vscode";
 import {
   NOTEBOOK_TYPE,
+  R_CELL_LANGUAGE,
+  isRLanguage,
   NATIVE_TEXT_VERSION,
   codeCellSource,
   serializeDocument,
@@ -55,7 +57,7 @@ type TextRenderResult = {
 function assertRCell(cell: vscode.NotebookCell): void {
   const metadata = cell.metadata as RNotebookCellMetadata;
   const engine = metadata.rNotebook?.engine ?? cell.document.languageId;
-  if (engine.toLowerCase() !== "r" || cell.document.languageId !== "r") {
+  if (!isRLanguage(engine.toLowerCase()) || !isRLanguage(cell.document.languageId)) {
     throw new Error(`The R notebook kernel cannot execute '${engine}' cells.`);
   }
 }
@@ -98,7 +100,7 @@ export class RNotebookController implements vscode.Disposable {
       NOTEBOOK_TYPE,
       "R Notebook"
     );
-    this.controller.supportedLanguages = ["r"];
+    this.controller.supportedLanguages = [R_CELL_LANGUAGE, "r"];
     this.controller.supportsExecutionOrder = true;
     this.controller.executeHandler = (cells) => this.execute(cells);
   }

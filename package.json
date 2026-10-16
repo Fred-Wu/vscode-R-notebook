@@ -56,6 +56,16 @@
     "RConsole.vsc-r-console"
   ],
   "contributes": {
+    "languages": [{
+      "id": "r-notebook-r",
+      "aliases": ["R (Notebook)"],
+      "configuration": "./resources/r/language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "r-notebook-r",
+      "scopeName": "source.r.notebook",
+      "path": "./resources/r/grammar.json"
+    }],
     "notebookRenderer": [
       {
         "id": "r-notebook-markdown-renderer",
@@ -168,12 +178,12 @@
       {
         "command": "r-notebook.enter",
         "key": "enter",
-        "when": "editorTextFocus && notebookType == r-notebook && editorLangId == r && !suggestWidgetVisible"
+        "when": "editorTextFocus && notebookType == r-notebook && editorLangId =~ /^(r|r-notebook-r)$/ && !suggestWidgetVisible"
       },
       {
         "command": "r-notebook.enter",
         "key": "enter",
-        "when": "editorTextFocus && notebookType == r-notebook && editorLangId == r && suggestWidgetVisible",
+        "when": "editorTextFocus && notebookType == r-notebook && editorLangId =~ /^(r|r-notebook-r)$/ && suggestWidgetVisible",
         "args": {
           "acceptSuggestion": true
         }
@@ -253,6 +263,7 @@
     "check-types": "tsc --noEmit -p ./",
     "test": "npm run test:unit && npm run test:r",
     "test:unit": "tsx --test test/**/*.test.ts",
+    "test:integration": "npm run compile && node scripts/test-integration.js",
     "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
@@ -271,6 +282,7 @@
     "esbuild": "^0.28.1",
     "js-yaml": "^4.3.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vscode-languageclient": "^9.0.1"
   }
 }

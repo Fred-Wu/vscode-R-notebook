@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { NOTEBOOK_TYPE } from "./document";
+import { NOTEBOOK_TYPE, isRLanguage } from "./document";
 
 interface Continuation {
   position: vscode.Position;
@@ -23,7 +23,7 @@ export class RNotebookEditing implements vscode.Disposable {
   }
 
   private continuations(editor: vscode.TextEditor | undefined): Continuation[] | undefined {
-    if (!editor || editor.document.languageId !== "r" || !this.isNotebookCell(editor.document)) {
+    if (!editor || !isRLanguage(editor.document.languageId) || !this.isNotebookCell(editor.document)) {
       return undefined;
     }
 

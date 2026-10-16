@@ -1,4 +1,9 @@
 export const NOTEBOOK_TYPE = "r-notebook";
+export const R_CELL_LANGUAGE = "r-notebook-r";
+
+export function isRLanguage(languageId: string): boolean {
+  return languageId === "r" || languageId === R_CELL_LANGUAGE;
+}
 export const NATIVE_TEXT_VERSION = 11;
 
 export interface NativeTextCache {
@@ -203,7 +208,7 @@ function endsWithEol(value: string): boolean {
 }
 
 export function defaultChunk(languageId: string, eol: string): ChunkMetadata {
-  const engine = languageId || "r";
+  const engine = isRLanguage(languageId) ? "r" : languageId || "r";
   return {
     openingFence: `\`\`\`{${engine}}${eol}`,
     closingFence: "```",

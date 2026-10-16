@@ -13,7 +13,7 @@ import {
   removeHeaderLabelShadowedByPipe,
 } from "./Notebook/options";
 import { RNotebookMarkdownCompletionProvider } from "./Notebook/markdownCompletions";
-import { RNotebookCodeCompletionProvider } from "./Notebook/rCompletions";
+import { RNotebookLanguageService } from "./Notebook/languageService";
 import { RMarkdownCellStatusBarProvider } from "./Notebook/statusBar";
 import { RNotebookSerializer } from "./Notebook/serializer";
 import {
@@ -30,6 +30,7 @@ import {
 } from "./notebookFile";
 
 const stateSaves = new Map<string, Promise<void>>();
+let languageService: RNotebookLanguageService | undefined;
 
 function isNotebookCell(value: unknown): value is vscode.NotebookCell {
   return Boolean(
@@ -212,7 +213,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const optionCompletions = new CellOptionCompletionProvider(output);
   const markdownCompletions = new RNotebookMarkdownCompletionProvider(output);
-  const codeCompletions = new RNotebookCodeCompletionProvider(output);
+  languageService = new RNotebookLanguageService(context.asAbsolutePath("resources/r/language_server.R"));
   const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
   );
@@ -282,11 +283,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { language: "markdown", notebookType: NOTEBOOK_TYPE },
       markdownCompletions
     ),
-    vscode.languages.registerCompletionItemProvider(
-      { scheme: "vscode-notebook-cell", language: "r", notebookType: NOTEBOOK_TYPE },
-      codeCompletions,
-      "(", "[", "$", "@", ":", ",", "'", '"'
-    ),
+    languageService,
     vscode.notebooks.registerNotebookCellStatusBarItemProvider(
       NOTEBOOK_TYPE,
       cellStatusBar
@@ -706,6 +703,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  await languageService?.stop();
   while (stateSaves.size > 0) {
     await Promise.all(stateSaves.values());
   }

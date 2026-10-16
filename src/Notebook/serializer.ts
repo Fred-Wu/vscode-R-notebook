@@ -3,6 +3,7 @@ import { TextDecoder, TextEncoder } from "node:util";
 import * as vscode from "vscode";
 import {
   NOTEBOOK_TYPE,
+  R_CELL_LANGUAGE,
   defaultChunk,
   parseDocument,
   serializeDocument,
@@ -61,7 +62,7 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
       const data = new vscode.NotebookCellData(
         cell.kind === "code" ? vscode.NotebookCellKind.Code : vscode.NotebookCellKind.Markup,
         cell.value,
-        cell.languageId
+        cell.languageId === "r" ? R_CELL_LANGUAGE : cell.languageId
       );
       if (cell.chunk) {
         data.metadata = { rNotebook: cell.chunk } satisfies RNotebookCellMetadata;
