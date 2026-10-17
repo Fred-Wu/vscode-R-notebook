@@ -65,13 +65,23 @@ output_text <- function(output_dir) {
   paste(payloads, collapse = "\n")
 }
 
+assert_done <- function(output_dir, expected) {
+  actual <- readLines(file.path(output_dir, "done"), warn = FALSE)
+  if (!identical(actual, expected)) {
+    cat("Unexpected bridge status in", output_dir, ": expected", expected,
+        "but received", actual, "\n", file = stderr())
+    cat(output_text(output_dir), "\n", file = stderr())
+  }
+  stopifnot(identical(actual, expected))
+}
+
 first <- run_chunk("first", c(
   "```{r, echo=FALSE}",
   "notebook_value <- 41L",
   "notebook_value",
   "```"
 ))
-stopifnot(identical(readLines(file.path(first, "done")), "true"))
+assert_done(first, "true")
 stopifnot(grepl("41", output_text(first), fixed = TRUE))
 
 second <- run_chunk("second", c(
@@ -80,7 +90,7 @@ second <- run_chunk("second", c(
   "notebook_value + 1L",
   "```"
 ), quarto_document)
-stopifnot(identical(readLines(file.path(second, "done")), "true"))
+assert_done(second, "true")
 stopifnot(grepl("42", output_text(second), fixed = TRUE))
 
 failed <- run_chunk("failed", c(
@@ -88,7 +98,7 @@ failed <- run_chunk("failed", c(
   "stop('expected bridge error')",
   "```"
 ))
-stopifnot(identical(readLines(file.path(failed, "done")), "false"))
+assert_done(failed, "false")
 failed_metadata <- readLines(file.path(failed, "000001.meta"), warn = FALSE)
 stopifnot("kind: error" %in% failed_metadata)
 stopifnot(grepl("expected bridge error", output_text(failed), fixed = TRUE))
@@ -120,7 +130,7 @@ r_notebook_render_text(
   evaluation_env = .GlobalEnv,
   quarto_executable = ""
 )
-stopifnot(identical(readLines(file.path(text_output, "done")), "true"))
+assert_done(text_output, "true")
 text_html <- paste(readLines(
   file.path(text_output, "result.html"),
   warn = FALSE,
