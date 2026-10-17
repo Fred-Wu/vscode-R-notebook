@@ -379,6 +379,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await markdownMessaging.postMessage({
           type: "rNotebook.textResult",
           requestId: request.requestId,
+          documentId: editor.notebook.uri.toString(),
           ...result,
         }, editor);
       } catch (error) {
@@ -390,6 +391,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await markdownMessaging.postMessage({
           type: "rNotebook.textResult",
           requestId: request.requestId,
+          documentId: editor.notebook.uri.toString(),
           error: message,
         }, editor);
       }

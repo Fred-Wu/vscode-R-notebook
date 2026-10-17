@@ -15,12 +15,26 @@ export function shouldReloadHeadScripts(
 }
 
 /** Show a document-level render failure only once; retain native Markdown elsewhere. */
-export function shouldDisplayRenderingError(seen: Set<string>, message: string): boolean {
-  if (seen.has(message)) {
+export function shouldDisplayRenderingError(
+  seen: Set<string>,
+  documentId: string,
+  message: string
+): boolean {
+  const key = JSON.stringify([documentId, message]);
+  if (seen.has(key)) {
     return false;
   }
-  seen.add(message);
+  seen.add(key);
   return true;
+}
+
+/** Clearing one document's errors must not suppress another notebook. */
+export function clearRenderingErrors(seen: Set<string>, documentId: string): void {
+  for (const key of seen) {
+    if (key.startsWith(JSON.stringify([documentId]).slice(0, -1) + ",")) {
+      seen.delete(key);
+    }
+  }
 }
 
 /** Native HTML is requested with embedded assets; reject remote script loading. */

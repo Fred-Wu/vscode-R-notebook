@@ -4,7 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
-import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
+import { isCurrentTextResponse, shouldDisplayRenderingError, clearRenderingErrors, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -21,6 +21,7 @@ interface MarkdownRenderer extends RendererApi {
 interface RenderResponse {
   type: "rNotebook.textResult";
   requestId: string;
+  documentId?: string;
   marker?: string;
   html?: string;
   cells?: Array<{ id: string; marker: string }>;
@@ -130,7 +131,11 @@ async function applyResponse(response: RenderResponse): Promise<void> {
   ) {
     const message = response.error ?? "Native text rendering failed.";
     placeholder.title = message;
-    if (!shouldDisplayRenderingError(displayedRenderingErrors, message)) {
+    if (!shouldDisplayRenderingError(
+      displayedRenderingErrors,
+      response.documentId ?? "",
+      message
+    )) {
       placeholder.removeAttribute("data-r-notebook-text-request");
       return;
     }
@@ -147,7 +152,7 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     return;
   }
 
-  displayedRenderingErrors.clear();
+  clearRenderingErrors(displayedRenderingErrors, response.documentId ?? "");
   const nativeDocument = new DOMParser().parseFromString(response.html, "text/html");
   const nativeCell = nativeDocument.getElementById(response.marker);
   if (!nativeCell) {
