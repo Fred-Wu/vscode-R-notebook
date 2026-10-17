@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { isTextRenderDependency, sourceReferencesDependency } from "./Notebook/renderDependencies";
+import { changedMarkupRequiresRefresh } from "./Notebook/markdownRefresh";
 import {
   NOTEBOOK_TYPE,
   type RNotebookCellMetadata,
@@ -574,7 +575,8 @@ export function activate(context: vscode.ExtensionContext): void {
         prepareNotebook(notebook);
       }
       const codeOptionsChanged = controller.markdownCodeOptionsChanged(notebook);
-      if (contentChanges.length > 0 || codeOptionsChanged) {
+      if (contentChanges.length > 0 || codeOptionsChanged ||
+          changedMarkupRequiresRefresh(cellChanges)) {
         void controller.refreshMarkdown(notebook).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           output.appendLine(`[Markdown] Could not refresh changed notebook text: ${message}`);
