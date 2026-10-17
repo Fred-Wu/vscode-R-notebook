@@ -4,6 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
+
 import { isCurrentTextResponse, shouldDisplayRenderingError, clearRenderingErrors, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
@@ -26,6 +27,7 @@ interface RenderResponse {
   html?: string;
   cells?: Array<{ id: string; marker: string }>;
   newDocument?: boolean;
+  nativeOnly?: boolean;
   error?: string;
 }
 
@@ -121,6 +123,11 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     .map((root) => root.querySelector<HTMLElement>(selector))
     .find((element) => element !== null);
   if (!placeholder) {
+    return;
+  }
+  if (response.nativeOnly) {
+    clearRenderingErrors(displayedRenderingErrors, response.documentId ?? "");
+    placeholder.removeAttribute("data-r-notebook-text-request");
     return;
   }
   if (
