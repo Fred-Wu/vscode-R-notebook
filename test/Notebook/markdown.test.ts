@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseDocument } from "../../src/Notebook/document";
 import {
+  executionMayChangeText,
   nativeCodeOptionSignature,
   nativeTextDocument,
 } from "../../src/Notebook/markdown";
@@ -152,4 +153,15 @@ test("does not invent a bookdown figure target without a caption", () => {
   assert.doesNotMatch(native.source, /\\#fig:test/);
   assert.match(native.replacements[0]?.source ?? "", /\\@ref\(fig:test\)/);
   assert.doesNotMatch(native.source, /plot\(cars\)/);
+});
+
+test("only execution-dependent Markdown invalidates the text render", () => {
+  const plain = parseDocument([
+    "# Results\n\nSee @fig-plot.\n",
+    "```{r}\n#| label: fig-plot\n#| fig-cap: Plot\nplot(cars)\n```\n",
+  ].join(""));
+  const dynamic = parseDocument("The value is `r nrow(cars)`.\n");
+  assert.equal(executionMayChangeText(plain.cells), false);
+  assert.equal(executionMayChangeText(dynamic.cells), true);
+  assert.equal(executionMayChangeText(parseDocument("Static **bold** text.\n").cells), false);
 });

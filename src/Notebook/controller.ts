@@ -13,7 +13,7 @@ import {
   type RNotebookCellMetadata,
   type RNotebookDocumentMetadata,
 } from "./document";
-import { nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
+import { executionMayChangeText, nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
 import { notebookSourceHash } from "./state";
 import {
   RExecutionBridge,
@@ -689,9 +689,11 @@ export class RNotebookController implements vscode.Disposable {
         if (session.stopped) {
           return;
         }
-        session.textRevision += 1;
-        await this.updateNativeTextCache(cell.notebook, undefined);
-        this.markdownStateChanged.fire(cell.notebook);
+        if (executionMayChangeText(context.cells)) {
+          session.textRevision += 1;
+          await this.updateNativeTextCache(cell.notebook, undefined);
+          this.markdownStateChanged.fire(cell.notebook);
+        }
         await execution.replaceOutput(result.outputs.map(bridgeOutputToNotebook));
         success = result.success && !execution.token.isCancellationRequested;
       } finally {

@@ -15,6 +15,16 @@ interface NativeTextDocument {
   replacements: Array<{ token: string; source: string }>;
 }
 
+/**
+ * Inline R is evaluated while Markdown is rendered and may observe the R
+ * environment changed by a code-cell execution. Static references and chunk
+ * options are already tracked through the notebook source/options signature.
+ */
+export function executionMayChangeText(cells: readonly ParsedCell[]): boolean {
+  return cells.some((cell) => cell.kind === "markup" &&
+    /`r[ \t\r\n]+[^`\r\n]+`/.test(cell.value));
+}
+
 export function nativeCodeOptionSignature(cells: readonly ParsedCell[]): string {
   const options = cells.flatMap((cell) => cell.kind === "code"
     ? [{
