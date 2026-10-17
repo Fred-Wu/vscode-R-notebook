@@ -25,8 +25,20 @@ jobs:
           use-public-rspm: true
       - name: Setup Quarto
         uses: quarto-dev/quarto-actions/setup@v2
+      - name: Expose Quarto Pandoc to R Markdown
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/r-notebook-pandoc"
+          cat > "${RUNNER_TEMP}/r-notebook-pandoc/pandoc" <<'EOF'
+          #!/usr/bin/env bash
+          exec quarto pandoc "$@"
+          EOF
+          chmod +x "${RUNNER_TEMP}/r-notebook-pandoc/pandoc"
+          echo "${RUNNER_TEMP}/r-notebook-pandoc" >> "${GITHUB_PATH}"
       - name: Install R test dependencies
         run: Rscript -e "install.packages(c('knitr', 'rmarkdown'))"
+      - name: Verify R Markdown can use Pandoc
+        run: Rscript -e "stopifnot(rmarkdown::pandoc_available())"
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
