@@ -5,6 +5,7 @@ import type {
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
 
+import { scopeNativeCss, decodeEmbeddedCss } from "./nativeCss";
 import { isCurrentTextResponse, shouldDisplayRenderingError, clearRenderingErrors, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
@@ -172,7 +173,7 @@ async function applyResponse(response: RenderResponse): Promise<void> {
   );
   const firstNativeCell = nativeDocument.querySelector(".r-notebook-markdown-cell");
   const assetSignature = Array.from(
-    nativeDocument.head.querySelectorAll("style, script"),
+    nativeDocument.head.querySelectorAll("style, script, link[rel=\"stylesheet\"]"),
     (element) => element.outerHTML
   ).join("\n");
   const styledRoots = new Set<Document | ShadowRoot>();
@@ -219,14 +220,14 @@ async function applyResponse(response: RenderResponse): Promise<void> {
         !styledRoots.has(elementRoot)
       ) {
         for (const oldStyle of elementRoot.querySelectorAll(
-          "style[data-r-notebook-native-style]"
+          "style[data-r-notebook-native-style],link[data-r-notebook-native-style]"
         )) {
           oldStyle.remove();
         }
         for (const style of nativeDocument.head.querySelectorAll("style")) {
           const copy = document.createElement("style");
           copy.dataset.rNotebookNativeStyle = "";
-          copy.textContent = style.textContent;
+          copy.textContent = scopeNativeCss(style.textContent ?? "");
           element.before(copy);
         }
         for (const sheet of nativeDocument.head.querySelectorAll<HTMLLinkElement>(
@@ -235,10 +236,13 @@ async function applyResponse(response: RenderResponse): Promise<void> {
           if (!isAllowedNativeStylesheetSource(sheet.getAttribute("href"))) {
             continue;
           }
-          const copy = document.createElement("link");
-          copy.rel = "stylesheet";
-          copy.href = sheet.href;
+          const css = decodeEmbeddedCss(sheet.getAttribute("href"));
+          if (css === undefined) {
+            continue;
+          }
+          const copy = document.createElement("style");
           copy.dataset.rNotebookNativeStyle = "";
+          copy.textContent = scopeNativeCss(css);
           element.before(copy);
         }
         styledRoots.add(elementRoot);
