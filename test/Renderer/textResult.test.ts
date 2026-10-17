@@ -18,7 +18,7 @@ test("reloads head scripts only when declarations change", () => {
 test("deduplicates repeated document-level render errors", () => {
   const seen = new Set<string>();
   assert.equal(shouldDisplayRenderingError(seen, "report.qmd", "Quarto failed"), true);
-  assert.equal(shouldDisplayRenderingError(seen, "Quarto failed"), false);
+  assert.equal(shouldDisplayRenderingError(seen, "report.qmd", "Quarto failed"), false);
   assert.equal(shouldDisplayRenderingError(seen, "report.qmd", "Missing bibliography"), true);
 });
 
