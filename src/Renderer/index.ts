@@ -4,7 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
-import { isCurrentTextResponse } from "./textResult";
+import { isCurrentTextResponse, shouldReloadHeadScripts } from "./textResult";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -34,7 +34,7 @@ interface RefreshRequest {
 
 const renderedSignatures = new WeakMap<HTMLElement, string>();
 let responseApplication = Promise.resolve();
-let headScriptsLoaded = false;
+let loadedHeadSignature: string | undefined;
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -229,9 +229,13 @@ async function applyResponse(response: RenderResponse): Promise<void> {
     }
   }
 
-  if (response.newDocument || !headScriptsLoaded) {
+  const nextHeadSignature = Array.from(
+    nativeDocument.head.querySelectorAll("script"),
+    (script) => script.outerHTML
+  ).join("\n");
+  if (shouldReloadHeadScripts(loadedHeadSignature, nextHeadSignature)) {
     await replaceHeadScripts(nativeDocument);
-    headScriptsLoaded = true;
+    loadedHeadSignature = nextHeadSignature;
   }
   for (const element of updatedElements) {
     for (const source of element.querySelectorAll("script")) {

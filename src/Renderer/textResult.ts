@@ -5,3 +5,11 @@ export function isCurrentTextResponse(
 ): boolean {
   return activeRequestId === responseRequestId;
 }
+
+/** Reuse widget dependencies until their script declarations actually change. */
+export function shouldReloadHeadScripts(
+  previousSignature: string | undefined,
+  nextSignature: string
+): boolean {
+  return previousSignature !== nextSignature;
+}
