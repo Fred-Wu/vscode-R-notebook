@@ -6,6 +6,9 @@ const { spawn } = require('node:child_process');
 const { createWriteStream } = require('node:fs');
 
 async function main() {
+  const suite = process.argv[2] || 'languageService';
+  if (!['languageService', 'viewers'].includes(suite)) throw new Error(`Unknown integration suite: ${suite}`);
+  const viewers = suite === 'viewers';
   const executable = process.env.VSCODE_EXECUTABLE;
   if (!executable) throw new Error('Set VSCODE_EXECUTABLE to the VS Code executable (Code.exe on Windows).');
   const extensionRoot = process.env.VSCODE_EXTENSIONS_DIR || path.join(os.homedir(), '.vscode', 'extensions');
@@ -28,9 +31,9 @@ async function main() {
       await fs.symlink(source, path.join(extensions, path.basename(source)), process.platform === 'win32' ? 'junction' : 'dir');
     }
     await fs.writeFile(path.join(profile, 'User', 'settings.json'), JSON.stringify({
-      'r.sessionWatcher': false,
-      'r.notebook.rExtensionIntegration': false,
-      'r.lsp.enabled': true,
+      'r.sessionWatcher': viewers,
+      'r.notebook.rExtensionIntegration': viewers,
+      'r.lsp.enabled': !viewers,
       'r.lsp.multiServer': process.env.R_LSP_MULTI_SERVER === 'true',
       'extensions.autoUpdate': false,
       ...(process.env.R_EXECUTABLE ? { 'r.executablePath': process.env.R_EXECUTABLE } : {})
@@ -42,7 +45,7 @@ async function main() {
       const child = spawn(executable, ['--new-window', '--skip-welcome', '--skip-release-notes',
         '--disable-workspace-trust', '--disable-gpu', `--user-data-dir=${profile}`,
         `--extensions-dir=${extensions}`, `--extensionDevelopmentPath=${path.resolve(__dirname, '..')}`,
-        `--extensionTestsPath=${path.resolve(__dirname, '../test/integration/languageService.cjs')}`, workspace],
+        `--extensionTestsPath=${path.resolve(__dirname, `../test/integration/${suite}.cjs`)}`, workspace],
       { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       child.stdout.pipe(log, { end: false });
       child.stderr.pipe(log, { end: false });
@@ -51,9 +54,9 @@ async function main() {
     });
     if (code !== 0) throw new Error(`VS Code integration tests exited with ${code}. Logs: ${profile}`);
     const results = (await fs.readFile(path.join(root, 'vscode.log'), 'utf8')).split(/\r?\n/)
-      .filter(line => /^(rmd:|qmd:|R \(Notebook\)|Ordinary R|Notebook language server|Notebook language service integration)/.test(line));
+      .filter(line => /^(rmd:|qmd:|R \(Notebook\)|Ordinary R|Notebook language server|Notebook language service integration|Notebook viewers:)/.test(line));
     for (const result of results) console.log(result);
-    console.log('Notebook language-service integration passed.');
+    console.log(`Notebook ${suite} integration passed.`);
     // Only remove this invocation's generated temporary directory after success.
     if (path.dirname(path.resolve(root)) !== path.resolve(os.tmpdir()) ||
       !path.basename(root).startsWith('r-notebook-integration-')) throw new Error('Invalid test cleanup path.');

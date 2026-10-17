@@ -440,12 +440,9 @@ export class RExecutionBridge {
           "    if (!base::exists(object_name, envir = .GlobalEnv, inherits = FALSE)) {",
           '      base::stop(base::paste("Cannot find", object_name, "in the notebook session."))',
           "    }",
-          '    vscode_tools <- base::as.environment("tools:vscode")',
-          '    view <- base::get0(".vsc.view", envir = vscode_tools, mode = "function", inherits = FALSE)',
-          "    if (base::is.null(view)) {",
-          '      base::stop("vscode-R Data Viewer is disabled for this session.")',
-          "    }",
-          "    view(base::get(object_name, envir = .GlobalEnv, inherits = FALSE), title = object_name)",
+          // The managed sess attachment installs both viewers through utils::View.
+          // Qualify the call so a user's global View function cannot mask it.
+          "    utils::View(base::get(object_name, envir = .GlobalEnv, inherits = FALSE), title = object_name)",
           "    success <- TRUE",
           "  }, error = function(error) {",
           "    base::writeLines(",

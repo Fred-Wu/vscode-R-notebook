@@ -265,6 +265,7 @@
     "test:render": "node --test test/integration/renderCrossReferences.cjs",
     "test:unit": "tsx --test test/**/*.test.ts",
     "test:integration": "npm run compile && node scripts/test-integration.js",
+    "test:integration:viewers": "npm run compile && node scripts/test-integration.js viewers",
     "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",

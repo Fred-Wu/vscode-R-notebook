@@ -556,6 +556,11 @@ export class RNotebookController implements vscode.Disposable {
         "Trust this workspace before viewing objects from an R notebook session."
       );
     }
+    if (!this.sessionIntegrationEnabled) {
+      throw new Error(
+        "Enable r.notebook.rExtensionIntegration and r.sessionWatcher, then reload the window to use vscode-R's data and list viewers."
+      );
+    }
     const sessionKey = this.selectedNotebookKey;
     if (!sessionKey) {
       throw new Error(
