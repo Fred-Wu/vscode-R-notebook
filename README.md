@@ -69,8 +69,6 @@ The notebook preview uses HTML even when the publishing output is Word or PDF.
 Explicit HTML outline settings take precedence; otherwise portable outline
 settings from the selected publishing format are used. The TOC lists Markdown
 headings such as `# Introduction` and `## Details`, rather than code-cell labels.
-Try [the Quarto example](examples/rendering.qmd) or
-[the Word-first R Markdown example](examples/rendering.Rmd) with **Open as R Notebook**.
 
 ## R Sessions
 
