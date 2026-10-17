@@ -988,6 +988,9 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
       active_marker <- base::substr(opening[[2L]], 1L, 1L)
       active_length <- base::nchar(opening[[2L]])
       is_fence <- TRUE
+    } else if (base::grepl("^(?: {4}|\\t)", line, perl = TRUE)) {
+      # Markdown also treats four-space or tab-indented lines as literal code.
+      is_fence <- TRUE
     }
     if (!is_fence) next
     token <- base::paste0("VSC_R_NOTEBOOK_FENCED_LINE_", index, "_")

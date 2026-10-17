@@ -153,3 +153,14 @@ inline_output <- r_notebook_inline_markdown(inline_source, .GlobalEnv)
 stopifnot(identical(r_notebook_inline_probe, 0L))
 stopifnot(grepl("fenced code executed", inline_output, fixed = TRUE))
 stopifnot(grepl("Outside 4.", inline_output, fixed = TRUE))
+
+
+# Four-space indented Markdown is also literal code, not inline R.
+r_notebook_inline_probe <- 0L
+indented_output <- r_notebook_inline_markdown(c(
+  "    `r {r_notebook_inline_probe <- 1L; stop('indented code executed')}`",
+  "Outside `r 6 + 1`."
+), .GlobalEnv)
+stopifnot(identical(r_notebook_inline_probe, 0L))
+stopifnot(grepl("indented code executed", indented_output, fixed = TRUE))
+stopifnot(grepl("Outside 7.", indented_output, fixed = TRUE))
