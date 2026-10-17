@@ -138,3 +138,18 @@ text_html <- paste(readLines(
 ), collapse = "\n")
 stopifnot(grepl("Horizon", text_html, fixed = TRUE))
 stopifnot(grepl("r-notebook-markdown-title", text_html, fixed = TRUE))
+
+
+# Fenced examples must never execute apparent inline R expressions.
+r_notebook_inline_probe <- 0L
+inline_source <- c(
+  "Inside literal code:",
+  "````markdown",
+  "`r {r_notebook_inline_probe <- 1L; stop('fenced code executed')}`",
+  "````",
+  "Outside `r 2 + 2`."
+)
+inline_output <- r_notebook_inline_markdown(inline_source, .GlobalEnv)
+stopifnot(identical(r_notebook_inline_probe, 0L))
+stopifnot(grepl("fenced code executed", inline_output, fixed = TRUE))
+stopifnot(grepl("Outside 4.", inline_output, fixed = TRUE))

@@ -964,14 +964,63 @@ r_notebook_render_rmarkdown_html <- function(
 }
 
 r_notebook_inline_markdown <- function(markup, evaluation_env) {
+  # knitr's inline parser is deliberately independent of Pandoc. Mask complete
+  # literal fenced code blocks so examples of `r expressions` are not run.
+  masked <- markup
+  originals <- list()
+  active_marker <- ""
+  active_length <- 0L
+  if (base::length(markup) > 0L) for (index in base::seq_along(markup)) {
+    line <- markup[[index]]
+    opening <- base::regmatches(
+      line, base::regexec("^ {0,3}(`{3,}|~{3,})", line, perl = TRUE)
+    )[[1L]]
+    is_fence <- FALSE
+    if (base::nzchar(active_marker)) {
+      is_fence <- TRUE
+      closing <- base::paste0(
+        "^ {0,3}", active_marker, "{", active_length, ",}[ \t]*$"
+      )
+      if (base::grepl(closing, line, perl = TRUE)) {
+        active_marker <- ""
+      }
+    } else if (base::length(opening) >= 2L) {
+      active_marker <- base::substr(opening[[2L]], 1L, 1L)
+      active_length <- base::nchar(opening[[2L]])
+      is_fence <- TRUE
+    }
+    if (!is_fence) next
+    token <- base::paste0("VSC_R_NOTEBOOK_FENCED_LINE_", index, "_")
+    while (base::any(base::grepl(token, markup, fixed = TRUE))) {
+      token <- base::paste0(token, "X")
+    }
+    masked[[index]] <- token
+    originals[[token]] <- line
+  }
+
   parsed <- utils::getFromNamespace("parse_inline", "knitr")(
-    markup,
+    masked,
     utils::getFromNamespace("all_patterns", "knitr")$md
   )
-  utils::getFromNamespace("inline_exec", "knitr")(
+  result <- utils::getFromNamespace("inline_exec", "knitr")(
     parsed,
     envir = evaluation_env
   )
+  for (token in base::names(originals)) {
+    position <- base::regexpr(token, result, fixed = TRUE)[[1L]]
+    if (position > 0L) {
+      result <- base::paste0(
+        base::substr(result, 1L, position - 1L),
+        originals[[token]],
+        base::substr(
+          result,
+          position + base::nchar(token),
+          base::nchar(result)
+        )
+      )
+    }
+  }
+  result
 }
 
 r_notebook_finish_request <- function(output_dir, success, request_name) {
