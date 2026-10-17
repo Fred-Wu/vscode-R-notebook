@@ -6,6 +6,7 @@ import type {
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
 
 import { scopeNativeCss, decodeEmbeddedCss } from "./nativeCss";
+import { annotateReferenceLinks, nativeDocumentHeader } from "./documentHeader";
 import { isCurrentTextResponse, shouldDisplayRenderingError, clearRenderingErrors, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
@@ -36,10 +37,25 @@ interface RefreshRequest {
   type: "rNotebook.refreshText";
 }
 
+interface RevealReferenceRequest {
+  type: "rNotebook.revealAnchor";
+  label: string;
+  markupId: string;
+}
+
 const renderedSignatures = new WeakMap<HTMLElement, string>();
+const originalMarkup = new WeakMap<HTMLElement, {
+  nodes: Node[];
+  id: string;
+  className: string;
+}>();
+// VS Code recreates Markdown DOM for metadata changes and preview toggles.
+// Keep the document header visible while an unchanged cell requests its HTML again.
+const documentHeaders = new Map<string, { source: string; html?: string }>();
 let responseApplication = Promise.resolve();
 let loadedHeadSignature: string | undefined;
 const displayedRenderingErrors = new Set<string>();
+let pendingReference: RevealReferenceRequest | undefined;
 
 function markupId(outputItem: OutputItem | undefined): string | undefined {
   const metadata = outputItem?.metadata as {
@@ -59,6 +75,20 @@ function roots(): Array<Document | ShadowRoot> {
     }
   }
   return result;
+}
+
+function revealPendingReference(): void {
+  if (!pendingReference) return;
+  const cellSelector = `[data-r-notebook-markup-id="${CSS.escape(encodeURIComponent(pendingReference.markupId))}"]`;
+  for (const root of roots()) {
+    const cell = root.querySelector<HTMLElement>(cellSelector);
+    const target = cell?.querySelector<HTMLElement>(`#${CSS.escape(pendingReference.label)}`);
+    if (target) {
+      target.scrollIntoView({ block: "center" });
+      pendingReference = undefined;
+      return;
+    }
+  }
 }
 
 function liveScript(source: HTMLScriptElement): HTMLScriptElement {
@@ -126,8 +156,24 @@ async function applyResponse(response: RenderResponse): Promise<void> {
   if (!placeholder) {
     return;
   }
+  if (!originalMarkup.has(placeholder)) {
+    const pendingHeader = placeholder.querySelector('[data-r-notebook-pending-header]');
+    originalMarkup.set(placeholder, {
+      nodes: Array.from(placeholder.childNodes).filter(node => node !== pendingHeader),
+      id: placeholder.id,
+      className: placeholder.className,
+    });
+  }
   if (response.nativeOnly) {
+    const encodedId = placeholder.dataset.rNotebookMarkupId;
+    if (encodedId) documentHeaders.delete(decodeURIComponent(encodedId));
     clearRenderingErrors(displayedRenderingErrors, response.documentId ?? "");
+    const original = originalMarkup.get(placeholder)!;
+    placeholder.replaceChildren(...original.nodes);
+    placeholder.id = original.id;
+    placeholder.className = original.className;
+    placeholder.removeAttribute("title");
+    renderedSignatures.delete(placeholder);
     placeholder.removeAttribute("data-r-notebook-text-request");
     return;
   }
@@ -204,9 +250,13 @@ async function applyResponse(response: RenderResponse): Promise<void> {
         ? element.querySelector<HTMLElement>("[data-r-notebook-front-matter]")
         : null;
       const frontMatterSignature = frontMatter?.outerHTML ?? "";
+      const header = renderedCell === firstNativeCell
+        ? nativeDocumentHeader(nativeDocument)
+        : undefined;
       const signature = [
         assetSignature,
         frontMatterSignature,
+        header?.outerHTML ?? "",
         renderedCell.outerHTML,
       ].join("\n");
       if (element !== placeholder && renderedSignatures.get(element) === signature) {
@@ -245,6 +295,23 @@ async function applyResponse(response: RenderResponse): Promise<void> {
           copy.textContent = scopeNativeCss(css);
           element.before(copy);
         }
+        const notebookStyle = document.createElement("style");
+        notebookStyle.dataset.rNotebookNativeStyle = "";
+        // HTML page defaults (notably Quarto's white page and 50px padding)
+        // must not replace the notebook theme or constrain the cell's width.
+        notebookStyle.textContent = `
+          .r-notebook-markdown-cell {
+            background: transparent !important;
+            color: inherit !important;
+            font: inherit !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            max-width: none !important;
+          }
+          .r-notebook-markdown-cell a { color: var(--vscode-textLink-foreground); }
+          .r-notebook-markdown-cell a:hover { color: var(--vscode-textLink-activeForeground); }
+        `;
+        element.before(notebookStyle);
         styledRoots.add(elementRoot);
       }
 
@@ -252,13 +319,38 @@ async function applyResponse(response: RenderResponse): Promise<void> {
       if (frontMatter) {
         content.push(document.importNode(frontMatter, true));
       }
+      if (header) content.push(header);
       content.push(
         ...Array.from(
           renderedCell.childNodes,
           (node) => document.importNode(node, true)
         )
       );
-      element.replaceChildren(...content);
+      const fragment = document.createDocumentFragment();
+      fragment.append(...content);
+      annotateReferenceLinks(fragment, nativeDocument, response.cells);
+      // Body styles share the same root as other cells, just like head styles.
+      for (const style of fragment.querySelectorAll("style")) {
+        style.textContent = scopeNativeCss(style.textContent ?? "");
+      }
+      for (const sheet of fragment.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
+        const css = decodeEmbeddedCss(sheet.getAttribute("href"));
+        if (css === undefined) {
+          sheet.remove();
+        } else {
+          const style = document.createElement("style");
+          style.media = sheet.media;
+          style.textContent = scopeNativeCss(css);
+          sheet.replaceWith(style);
+        }
+      }
+      if (encodedId) {
+        const id = decodeURIComponent(encodedId);
+        const cachedHeader = documentHeaders.get(id);
+        if (header && cachedHeader) cachedHeader.html = header.outerHTML;
+        else documentHeaders.delete(id);
+      }
+      element.replaceChildren(fragment);
       element.id = cell.marker;
       element.className = renderedCell.className;
       element.removeAttribute("title");
@@ -267,6 +359,8 @@ async function applyResponse(response: RenderResponse): Promise<void> {
       updatedElements.push(element);
     }
   }
+
+  revealPendingReference();
 
   const nextHeadSignature = Array.from(
     nativeDocument.head.querySelectorAll("script"),
@@ -296,7 +390,14 @@ export const activate: ActivationFunction = async (context) => {
   }
 
   context.onDidReceiveMessage?.((message: unknown) => {
-    const response = message as Partial<RenderResponse> & Partial<RefreshRequest>;
+    const response = message as Partial<RenderResponse> | Partial<RefreshRequest> |
+      Partial<RevealReferenceRequest>;
+    if (response.type === "rNotebook.revealAnchor" &&
+        typeof response.label === "string" && typeof response.markupId === "string") {
+      pendingReference = response as RevealReferenceRequest;
+      revealPendingReference();
+      return;
+    }
     if (
       response.type === "rNotebook.textResult" &&
       typeof response.requestId === "string"
@@ -333,7 +434,22 @@ export const activate: ActivationFunction = async (context) => {
     ) {
       return;
     }
-    const id = decodeURIComponent(anchor.hash.slice(1));
+    let id: string;
+    try {
+      id = decodeURIComponent(anchor.hash.slice(1));
+    } catch {
+      return;
+    }
+    const targetCell = anchor.dataset.rNotebookTargetCell;
+    if (targetCell) {
+      event.preventDefault();
+      context.postMessage?.({
+        type: "rNotebook.revealReference",
+        label: id,
+        markupId: targetCell,
+      });
+      return;
+    }
     const target = roots()
       .map((root) => root.querySelector<HTMLElement>(`#${CSS.escape(id)}`))
       .find((element) => element !== null);
@@ -353,18 +469,27 @@ export const activate: ActivationFunction = async (context) => {
     const render = markdownIt.render.bind(markdownIt);
     markdownIt.render = (source, environment) => {
       const split = splitFrontMatter(source);
+      const renderedBody = render(split.body, environment);
       const originalHtml = yamlFrontMatterHtml(split.frontMatter) +
-        render(split.body, environment);
+        renderedBody;
       const id = markupId(environment?.outputItem);
       if (!id) {
         return originalHtml;
       }
+      const previousHeader = documentHeaders.get(id);
+      if (previousHeader?.source !== source) documentHeaders.set(id, { source });
+      const cachedHeader = documentHeaders.get(id)?.html;
+      const pendingHeader = cachedHeader
+        ? cachedHeader.replace("<div ", '<div data-r-notebook-pending-header="" ')
+        : "";
       const requestId = crypto.randomUUID();
       context.postMessage?.({ type: "rNotebook.renderText", requestId, markupId: id });
       return [
         `<div data-r-notebook-text-request="${requestId}"`,
         ` data-r-notebook-markup-id="${encodeURIComponent(id)}">`,
-        originalHtml,
+        yamlFrontMatterHtml(split.frontMatter),
+        pendingHeader,
+        renderedBody,
         "</div>",
       ].join("");
     };

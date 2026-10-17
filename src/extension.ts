@@ -220,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "**/*.{yml,yaml}"
   );
   const renderDependencyWatcher = vscode.workspace.createFileSystemWatcher(
-    "**/*.{bib,csl,css,scss,md,markdown,html,htm,js,svg,lua,py}"
+    "**/*.{bib,csl,css,scss,md,markdown,[qQrR][mM][dD],html,htm,js,svg,lua,py}"
   );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
@@ -355,6 +355,10 @@ export function activate(context: vscode.ExtensionContext): void {
         typeof request.label === "string"
       ) {
         const target = editor.notebook.getCells().find((cell) => {
+          if (typeof request.markupId === "string") {
+            return cell.kind === vscode.NotebookCellKind.Markup &&
+              (cell.metadata as RNotebookCellMetadata).rNotebookMarkdown?.id === request.markupId;
+          }
           if (cell.kind !== vscode.NotebookCellKind.Code) {
             return false;
           }
@@ -366,6 +370,13 @@ export function activate(context: vscode.ExtensionContext): void {
             new vscode.NotebookRange(target.index, target.index + 1),
             vscode.NotebookEditorRevealType.InCenter
           );
+          if (typeof request.markupId === "string") {
+            await markdownMessaging.postMessage({
+              type: "rNotebook.revealAnchor",
+              label: request.label,
+              markupId: request.markupId,
+            }, editor);
+          }
         }
         return;
       }

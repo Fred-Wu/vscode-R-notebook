@@ -48,7 +48,9 @@ export function scopeNativeCss(css: string): string {
     if (rule.type === CSSRule.IMPORT_RULE) return "";
     if (rule.type === CSSRule.STYLE_RULE) {
       const style = rule as CSSStyleRule;
-      return scopeNativeCssSelector(style.selectorText) + "{" + style.style.cssText + "}";
+      // Nested rules are already bounded by their scoped parent selector.
+      const nested = Array.from(style.cssRules ?? [], (child) => child.cssText).join("\n");
+      return scopeNativeCssSelector(style.selectorText) + "{" + style.style.cssText + nested + "}";
     }
     if (rule.type !== CSSRule.KEYFRAMES_RULE && "cssRules" in rule) {
       const group = rule as CSSGroupingRule;

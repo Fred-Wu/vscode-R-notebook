@@ -29,6 +29,7 @@ import {
 import type { RConsoleTransport } from "../Runtime/console";
 import { isQuartoNotebook } from "../notebookFile";
 import { needsNativeDocumentRender } from "../Renderer/nativeMarkdown";
+import { hasQuartoProjectConfiguration } from "./renderDependencies";
 
 interface NotebookSession {
   uri: vscode.Uri;
@@ -373,7 +374,7 @@ export class RNotebookController implements vscode.Disposable {
     }
   }
 
-  renderText(
+  async renderText(
     notebook: vscode.NotebookDocument,
     markupId: string
   ): Promise<TextRenderResult> {
@@ -401,7 +402,9 @@ export class RNotebookController implements vscode.Disposable {
       return Promise.reject(new Error("The Markdown cell is no longer available."));
     }
     const cells = nativeDocument.cells.map(({ id, marker }) => ({ id, marker }));
-    if (!needsNativeDocumentRender(context.cells)) {
+    if (!needsNativeDocumentRender(context.cells) &&
+        !(isQuartoNotebook(notebook.uri.fsPath) &&
+          await hasQuartoProjectConfiguration(notebook.uri.fsPath))) {
       return Promise.resolve({
         html: "",
         marker: target.marker,

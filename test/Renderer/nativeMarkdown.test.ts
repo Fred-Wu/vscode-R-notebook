@@ -8,6 +8,7 @@ test("ordinary Markdown uses VS Code native rendering", () => {
     "- A\n- B\n\n| x | y |\n| - | - |\n| 1 | 2 |",
     "![ordinary image](plot.png)",
     "A [regular link](https://example.org).",
+    "Contact name@example.org or word@word.example.",
     "\n\n",
   ]) {
     assert.equal(needsNativeTextRender(source), false, source);
@@ -17,10 +18,14 @@ test("ordinary Markdown uses VS Code native rendering", () => {
 test("Quarto and knitr features retain document-wide rendering", () => {
   for (const source of [
     "The value is \`r sum(1:10)\`.",
+    "The value is `r sum(\n  1:10\n)`.",
     "See @fig-test and @tbl-data.",
     "See Figure \\@ref(fig:plot).",
     "See [@some-paper].",
     "As demonstrated by @some-paper.",
+    "See @w and @r.",
+    "[shared]: https://example.org",
+    "[^note]: A footnote from another cell.",
     "# Results {#sec-results}",
     "![Plot](plot.png){#fig-test}",
     "::: {.callout-note}\nHello\n:::",

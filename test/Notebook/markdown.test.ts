@@ -163,5 +163,6 @@ test("only execution-dependent Markdown invalidates the text render", () => {
   const dynamic = parseDocument("The value is `r nrow(cars)`.\n");
   assert.equal(executionMayChangeText(plain.cells), false);
   assert.equal(executionMayChangeText(dynamic.cells), true);
+  assert.equal(executionMayChangeText(parseDocument("The value is `r sum(\n1:3\n)`.\n").cells), true);
   assert.equal(executionMayChangeText(parseDocument("Static **bold** text.\n").cells), false);
 });

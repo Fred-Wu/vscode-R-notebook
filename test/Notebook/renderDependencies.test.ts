@@ -3,11 +3,12 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency } from "../../src/Notebook/renderDependencies";
+import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency, hasQuartoProjectConfiguration } from "../../src/Notebook/renderDependencies";
 
 test("recognizes external references and styles for text invalidation", () => {
   for (const file of ["refs.bib", "apa.csl", "theme.css", "extra.scss",
-    "chapter.md", "chapter.markdown", "before-body.html", "widget.js", "figure.svg"]) {
+    "chapter.md", "chapter.markdown", "partial.qmd", "partial.Rmd",
+    "before-body.html", "widget.js", "figure.svg"]) {
     assert.equal(isTextRenderDependency(file), true, file);
   }
   assert.equal(isTextRenderDependency("code.R"), false);
@@ -28,10 +29,12 @@ test("detects Quarto resources inherited from project configuration", async () =
   try {
     const chapter = path.join(root, "chapters");
     await fs.mkdir(chapter);
-    await fs.writeFile(path.join(root, "_quarto.yml"),
-      "bibliography: references.bib\\nfilters: [crossref.lua]\\n");
-    await fs.writeFile(path.join(chapter, "_metadata.yml"), "css: custom.css\\n");
     const notebook = path.join(chapter, "chapter.qmd");
+    assert.equal(await hasQuartoProjectConfiguration(notebook), false);
+    await fs.writeFile(path.join(root, "_quarto.yml"),
+      "bibliography: references.bib\nfilters: [crossref.lua]\n");
+    await fs.writeFile(path.join(chapter, "_metadata.yml"), "css: custom.css\n");
+    assert.equal(await hasQuartoProjectConfiguration(notebook), true);
     assert.equal(await quartoProjectReferencesDependency(
       notebook, path.join(root, "references.bib")
     ), true);

@@ -22,7 +22,7 @@ interface NativeTextDocument {
  */
 export function executionMayChangeText(cells: readonly ParsedCell[]): boolean {
   return cells.some((cell) => cell.kind === "markup" &&
-    /`r[ \t\r\n]+[^`\r\n]+`/.test(cell.value));
+    /`r\s+[^`]+`/.test(cell.value));
 }
 
 export function nativeCodeOptionSignature(cells: readonly ParsedCell[]): string {

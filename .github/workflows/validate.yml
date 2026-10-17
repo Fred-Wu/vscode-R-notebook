@@ -44,4 +44,6 @@ jobs:
       - name: Typecheck
         run: npm run check-types
       - name: Unit and native renderer tests
+        env:
+          CHROME_PATH: google-chrome
         run: npm test

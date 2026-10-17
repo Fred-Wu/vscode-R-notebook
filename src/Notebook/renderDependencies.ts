@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 /** Resource changes that can affect text produced by Quarto or Pandoc. */
 const renderExtensions = new Set([
-  ".bib", ".csl", ".css", ".scss", ".md", ".markdown",
+  ".bib", ".csl", ".css", ".scss", ".md", ".markdown", ".qmd", ".rmd",
   ".html", ".htm", ".js", ".svg", ".lua", ".py",
 ]);
 
@@ -28,12 +28,25 @@ export async function quartoProjectReferencesDependency(
   documentPath: string,
   changedPath: string
 ): Promise<boolean> {
+  return quartoConfigurationMatches(documentPath, (source) =>
+    sourceReferencesDependency(source, changedPath));
+}
+
+/** Even plain text can inherit native formatting from Quarto configuration. */
+export function hasQuartoProjectConfiguration(documentPath: string): Promise<boolean> {
+  return quartoConfigurationMatches(documentPath, () => true);
+}
+
+async function quartoConfigurationMatches(
+  documentPath: string,
+  matches: (source: string) => boolean
+): Promise<boolean> {
   let directory = path.dirname(documentPath);
   while (true) {
     for (const name of ["_quarto.yml", "_quarto.yaml", "_metadata.yml"]) {
       try {
         const source = await readFile(path.join(directory, name), "utf8");
-        if (sourceReferencesDependency(source, changedPath)) {
+        if (matches(source)) {
           return true;
         }
       } catch (error) {
