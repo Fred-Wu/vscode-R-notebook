@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { isTextRenderDependency } from "./Notebook/renderDependencies";
+import { isTextRenderDependency, sourceReferencesDependency } from "./Notebook/renderDependencies";
 import {
   NOTEBOOK_TYPE,
   type RNotebookCellMetadata,
@@ -254,7 +254,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     for (const notebook of vscode.workspace.notebookDocuments) {
       if (notebook.notebookType !== NOTEBOOK_TYPE ||
-          notebook.uri.scheme !== "file") {
+          notebook.uri.scheme !== "file" ||
+          !notebook.getCells().some((cell) =>
+            sourceReferencesDependency(cell.document.getText(), uri.fsPath)
+          )) {
         continue;
       }
       void controller.refreshMarkdown(notebook).catch((error: unknown) => {
