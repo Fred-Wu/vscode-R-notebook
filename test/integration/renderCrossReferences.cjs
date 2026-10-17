@@ -24,6 +24,11 @@ test("Quarto resolves cross-references to non-executable notebook figure placeho
         "",
         "See @fig-nb-test.",
         "",
+        "::: {#tbl-nb-test tbl-cap=\"A test table\"}",
+        ":::",
+        "",
+        "See @tbl-nb-test.",
+        "",
       ].join("\n");
       fs.writeFileSync(path.join(dir, "test.qmd"), qmd);
       execFileSync(quarto,
@@ -33,6 +38,8 @@ test("Quarto resolves cross-references to non-executable notebook figure placeho
       assert.match(html, /fig-nb-test/);
       assert.doesNotMatch(html, /\?@fig-nb-test|<span class="citeproc-not-found"/);
       assert.match(html, /href="#fig-nb-test"/);
+      assert.match(html, /href="#tbl-nb-test"/);
+      assert.doesNotMatch(html, /\?@tbl-nb-test/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
