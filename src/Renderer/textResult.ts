@@ -13,3 +13,12 @@ export function shouldReloadHeadScripts(
 ): boolean {
   return previousSignature !== nextSignature;
 }
+
+/** Show a document-level render failure only once; retain native Markdown elsewhere. */
+export function shouldDisplayRenderingError(seen: Set<string>, message: string): boolean {
+  if (seen.has(message)) {
+    return false;
+  }
+  seen.add(message);
+  return true;
+}
