@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { splitFrontMatter, yamlFrontMatterHtml } from "../src/markdown";
+import { splitFrontMatter, yamlFrontMatterHtml } from "../../src/markdown";
 
 test("front matter is accessible and source remains escaped", () => {
   const source = "---\ntitle: A < B\n---\n\nBody";
