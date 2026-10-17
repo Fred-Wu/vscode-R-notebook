@@ -4,7 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
-import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts } from "./textResult";
+import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource } from "./textResult";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -74,6 +74,10 @@ async function replaceHeadScripts(nativeDocument: Document): Promise<void> {
   }
 
   for (const source of nativeDocument.head.querySelectorAll("script")) {
+    if (!isAllowedNativeScriptSource(source.getAttribute("src"))) {
+      console.warn("Skipped an external script in native notebook text.");
+      continue;
+    }
     const script = liveScript(source);
     script.dataset.rNotebookNativeScript = "";
     const type = (script.getAttribute("type") ?? "").trim().toLowerCase();
@@ -246,7 +250,11 @@ async function applyResponse(response: RenderResponse): Promise<void> {
   }
   for (const element of updatedElements) {
     for (const source of element.querySelectorAll("script")) {
-      source.replaceWith(liveScript(source));
+      if (isAllowedNativeScriptSource(source.getAttribute("src"))) {
+        source.replaceWith(liveScript(source));
+      } else {
+        source.remove();
+      }
     }
   }
 }

@@ -22,3 +22,11 @@ export function shouldDisplayRenderingError(seen: Set<string>, message: string):
   seen.add(message);
   return true;
 }
+
+/** Native HTML is requested with embedded assets; reject remote script loading. */
+export function isAllowedNativeScriptSource(source: string | null): boolean {
+  if (source === null) {
+    return true;
+  }
+  return /^(?:data:(?:application|text)\/(?:javascript|ecmascript))(?:[;,]|$)/i.test(source.trim());
+}
