@@ -30,3 +30,8 @@ export function isAllowedNativeScriptSource(source: string | null): boolean {
   }
   return /^(?:data:(?:application|text)\/(?:javascript|ecmascript))(?:[;,]|$)/i.test(source.trim());
 }
+
+/** Only embedded CSS is allowed into the notebook's shared render environment. */
+export function isAllowedNativeStylesheetSource(source: string | null): boolean {
+  return source !== null && /^data:text\/css(?:[;,]|$)/i.test(source.trim());
+}

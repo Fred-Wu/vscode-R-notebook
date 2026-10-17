@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource } from "../../src/Renderer/textResult";
+import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "../../src/Renderer/textResult";
 
 test("text render responses update only the cell that requested them", () => {
   assert.equal(isCurrentTextResponse("old", "old"), true);
@@ -29,4 +29,12 @@ test("native text runs embedded scripts without loading remote dependencies", ()
   assert.equal(isAllowedNativeScriptSource("//example.com/script.js"), false);
   assert.equal(isAllowedNativeScriptSource("file:///tmp/script.js"), false);
   assert.equal(isAllowedNativeScriptSource("javascript:alert(1)"), false);
+});
+
+test("allows embedded stylesheets but not remote stylesheets", () => {
+  assert.equal(isAllowedNativeStylesheetSource("data:text/css;base64,YQ=="), true);
+  assert.equal(isAllowedNativeStylesheetSource("data:text/css,body%7B%7D"), true);
+  assert.equal(isAllowedNativeStylesheetSource("https://example.com/theme.css"), false);
+  assert.equal(isAllowedNativeStylesheetSource("file:///tmp/theme.css"), false);
+  assert.equal(isAllowedNativeStylesheetSource(null), false);
 });

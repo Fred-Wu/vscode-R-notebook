@@ -4,7 +4,7 @@ import type {
   RendererApi,
 } from "vscode-notebook-renderer";
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
-import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource } from "./textResult";
+import { isCurrentTextResponse, shouldDisplayRenderingError, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
   outputItem?: OutputItem;
@@ -215,6 +215,18 @@ async function applyResponse(response: RenderResponse): Promise<void> {
           const copy = document.createElement("style");
           copy.dataset.rNotebookNativeStyle = "";
           copy.textContent = style.textContent;
+          element.before(copy);
+        }
+        for (const sheet of nativeDocument.head.querySelectorAll<HTMLLinkElement>(
+          'link[rel="stylesheet"]'
+        )) {
+          if (!isAllowedNativeStylesheetSource(sheet.getAttribute("href"))) {
+            continue;
+          }
+          const copy = document.createElement("link");
+          copy.rel = "stylesheet";
+          copy.href = sheet.href;
+          copy.dataset.rNotebookNativeStyle = "";
           element.before(copy);
         }
         styledRoots.add(elementRoot);
