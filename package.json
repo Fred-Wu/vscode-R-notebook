@@ -261,7 +261,8 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit -p ./",
-    "test": "npm run test:unit && npm run test:r",
+    "test": "npm run test:unit && npm run test:render && npm run test:r",
+    "test:render": "node --test test/integration/renderCrossReferences.cjs",
     "test:unit": "tsx --test test/**/*.test.ts",
     "test:integration": "npm run compile && node scripts/test-integration.js",
     "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
