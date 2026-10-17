@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { isTextRenderDependency, sourceReferencesDependency } from "./Notebook/renderDependencies";
+import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency } from "./Notebook/renderDependencies";
 import { changedMarkupRequiresRefresh } from "./Notebook/markdownRefresh";
 import {
   NOTEBOOK_TYPE,
@@ -220,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "**/*.{yml,yaml}"
   );
   const renderDependencyWatcher = vscode.workspace.createFileSystemWatcher(
-    "**/*.{bib,csl,css,scss,md,markdown,html,htm,js,svg}"
+    "**/*.{bib,csl,css,scss,md,markdown,html,htm,js,svg,lua,py}"
   );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
@@ -255,13 +255,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     for (const notebook of vscode.workspace.notebookDocuments) {
       if (notebook.notebookType !== NOTEBOOK_TYPE ||
-          notebook.uri.scheme !== "file" ||
-          !notebook.getCells().some((cell) =>
-            sourceReferencesDependency(cell.document.getText(), uri.fsPath)
-          )) {
+          notebook.uri.scheme !== "file") {
         continue;
       }
-      void controller.refreshMarkdown(notebook).catch((error: unknown) => {
+      const directlyReferenced = notebook.getCells().some((cell) =>
+        sourceReferencesDependency(cell.document.getText(), uri.fsPath)
+      );
+      const projectMatch = directlyReferenced
+        ? Promise.resolve(true)
+        : isQuartoNotebook(notebook.uri.fsPath)
+          ? quartoProjectReferencesDependency(notebook.uri.fsPath, uri.fsPath)
+          : Promise.resolve(false);
+      void projectMatch.then((matched) =>
+        matched ? controller.refreshMarkdown(notebook) : undefined
+      ).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[Markdown] Could not refresh dependent resources: ${message}`);
       });
