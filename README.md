@@ -137,8 +137,9 @@ and `.qmd` cells, edits, language features, URI mapping and ordinary R documents
 Set `R_LSP_MULTI_SERVER=true` to also exercise vscode-R's multiple-server mode.
 
 Run `npm run test:integration:rendering` with the same environment to check the
-TOC in the actual VS Code notebook webview, including headings after introductory
-text and navigation to cells outside the initial viewport. R Markdown, Pandoc,
+TOC in the actual VS Code notebook webview across `.rmd`, `.Rmd`, `.RMD`, `.qmd`
+and `.QMD`, including headings immediately after introductory text and navigation
+to cells outside the initial viewport. R Markdown, Pandoc,
 and Quarto must be available. The test uses a temporary profile and a local
 Chromium debugging port to inspect the rendered cells.
 

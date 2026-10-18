@@ -201,6 +201,7 @@ async function run(): Promise<void> {
   const nativeFixtures = await (await fetch("/native-fixtures")).json() as Array<{
     name: string; html: string; cells: Array<{ id: string; marker: string }>;
   }>;
+  let expectedTocStyles: string | undefined;
   for (const fixture of nativeFixtures) {
     const fixtureHost = document.createElement("div");
     document.body.append(fixtureHost);
@@ -217,6 +218,14 @@ async function run(): Promise<void> {
       `${fixture.name}: native author is missing`);
     check(renderedToc && getComputedStyle(renderedToc).display !== "none" &&
       renderedToc.getBoundingClientRect().height > 0, `${fixture.name}: native TOC is not visible`);
+    const tocStyles = JSON.stringify([renderedToc, ...['h2', 'ul', 'li', 'a', 'ul ul']
+      .map(selector => renderedToc.querySelector(selector)!)].map(element => {
+        const style = getComputedStyle(element);
+        return [style.fontSize, style.fontWeight, style.lineHeight, style.color,
+          style.margin, style.padding, style.listStyleType, style.borderWidth, style.display];
+      }));
+    expectedTocStyles ??= tocStyles;
+    check(tocStyles === expectedTocStyles, `${fixture.name}: TOC layout differs between extensions or engines`);
     const resultsLink = renderedToc.querySelector<HTMLAnchorElement>('a[href="#results"]');
     check(resultsLink && resultsLink.dataset.rNotebookTargetCell === fixture.cells[1]?.id,
       `${fixture.name}: native TOC does not target the Results notebook cell`);

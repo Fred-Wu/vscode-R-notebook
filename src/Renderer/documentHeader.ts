@@ -1,3 +1,37 @@
+/** Use native TOC labels and destinations with one notebook layout for both engines. */
+function notebookToc(source: HTMLElement): HTMLElement {
+  const toc = document.createElement("nav");
+  toc.dataset.rNotebookToc = "";
+  toc.setAttribute("role", "navigation");
+  toc.style.cssText = "display:block;position:static;background:transparent;color:inherit;font:inherit;line-height:1.5;margin:1em 0;padding:0;width:auto;height:auto;max-height:none;overflow:visible";
+  const heading = document.createElement("h2");
+  const nativeHeading = source.querySelector("h1, h2, h3, h4, h5, h6");
+  if (nativeHeading) heading.append(...Array.from(nativeHeading.childNodes, node => document.importNode(node, true)));
+  else heading.textContent = "Table of contents";
+  heading.style.cssText = "font:inherit;font-size:1.2em;font-weight:600;line-height:1.5;margin:0 0 0.5em;padding:0;border:0;color:inherit";
+  toc.setAttribute("aria-label", heading.textContent ?? "Table of contents");
+  toc.append(heading);
+  for (const list of source.querySelectorAll("ul, ol")) {
+    if (!list.parentElement?.closest("ul, ol")) toc.append(document.importNode(list, true));
+  }
+  // Drop page navigation classes and IDs, so Quarto's sidebar styles cannot
+  // change the notebook TOC. Preserve inline label formatting and native hashes.
+  for (const element of toc.querySelectorAll<HTMLElement>("ul, ol, li, a")) {
+    element.removeAttribute("class");
+    element.removeAttribute("id");
+    element.removeAttribute("style");
+    element.removeAttribute("data-scroll-target");
+    if (element.matches("ul, ol")) {
+      element.style.cssText = "display:block;position:static;margin:0;padding:0 0 0 1.5em;list-style:disc outside;font:inherit;color:inherit";
+    } else if (element.matches("li")) {
+      element.style.cssText = "display:list-item;margin:0;padding:0;border:0;font:inherit;color:inherit";
+    } else {
+      element.style.cssText = "display:inline;margin:0;padding:0;border:0;background:transparent;font:inherit;color:var(--vscode-textLink-foreground);text-decoration:none";
+    }
+  }
+  return toc;
+}
+
 /** Keep the native title and TOC, which Pandoc emits outside the cell wrappers. */
 export function nativeDocumentHeader(nativeDocument: Document): HTMLElement | undefined {
   const header = document.createElement("div");
@@ -18,30 +52,7 @@ export function nativeDocumentHeader(nativeDocument: Document): HTMLElement | un
   }
   for (const source of [title, outsideCell("#TOC")]) {
     if (!source) continue;
-    const copy = document.importNode(source, true);
-    if (source.id === "TOC") {
-      copy.dataset.rNotebookToc = "";
-      copy.setAttribute("role", "navigation");
-      if (!copy.querySelector("h1, h2, h3, h4, h5, h6")) {
-        const heading = document.createElement("h2");
-        heading.textContent = "Table of contents";
-        copy.prepend(heading);
-      }
-      if (!copy.hasAttribute("aria-label") && !copy.hasAttribute("aria-labelledby")) {
-        copy.setAttribute("aria-label", copy.querySelector("h2")?.textContent ?? "Table of contents");
-      }
-      // Sidebar positioning and collapsible lists require the full Quarto page.
-      // Within a notebook the TOC is a normal block with all configured levels visible.
-      copy.style.cssText = "position:static;width:auto;height:auto;max-height:none;overflow:visible;display:block";
-      for (const list of copy.querySelectorAll<HTMLElement>("ul, ol")) {
-        list.classList.remove("collapse", "collapsing");
-        list.style.display = "block";
-      }
-      for (const link of copy.querySelectorAll("a")) {
-        link.classList.remove("active");
-        link.removeAttribute("data-scroll-target");
-      }
-    }
+    const copy = source.id === "TOC" ? notebookToc(source) : document.importNode(source, true);
     header.append(copy);
   }
   return header.childNodes.length > 0 ? header : undefined;

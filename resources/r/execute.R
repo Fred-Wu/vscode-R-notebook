@@ -676,6 +676,8 @@ r_notebook_rmarkdown_html_format <- function(document_path, document_outline = F
     self_contained = TRUE,
     theme = NULL,
     highlight = NULL,
+    # Match notebook Markdown headings even directly after a paragraph.
+    md_extensions = if (base::isTRUE(document_outline)) "-blank_before_header" else NULL,
     toc = base::isTRUE(document_outline) && base::isTRUE(configured_format$options$toc),
     toc_depth = if (base::is.numeric(configured_format$options$toc_depth)) {
       configured_format$options$toc_depth
@@ -1211,6 +1213,7 @@ r_notebook_render_text <- function(
           "render",
           base::shQuote(base::basename(native_document_path)),
           "--to", "html",
+          "--metadata", "from:markdown-blank_before_header",
           "--no-execute",
           "--quiet",
           "--output", "-",

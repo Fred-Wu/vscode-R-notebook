@@ -19,7 +19,7 @@ test("renderer applies responses and isolates styles in a browser shadow root", 
   skip: !browser && "Set CHROME_PATH to run the browser renderer regressions",
 }, async (t) => {
   const fixtures = require("./nativeFixtures.cjs").nativeFixtures();
-  t.diagnostic(fixtures.length ? "Checking real R Markdown and Quarto example HTML" :
+  t.diagnostic(fixtures.length ? "Checking native .rmd, .Rmd, .RMD, .qmd and .QMD HTML with identical TOC styling" :
     "Rscript is unavailable; checking synthetic browser fixtures only");
   const bundle = await build({
     entryPoints: [path.join(__dirname, "../Renderer/browser.ts")],

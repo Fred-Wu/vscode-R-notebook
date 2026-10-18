@@ -92,7 +92,52 @@
         "displayName": "R Notebook Editor",
         "selector": [
           {
-            "filenamePattern": "*.[rRqQ][mM][dD]"
+            "filenamePattern": "*.rmd"
+          },
+          {
+            "filenamePattern": "*.Rmd"
+          },
+          {
+            "filenamePattern": "*.rMd"
+          },
+          {
+            "filenamePattern": "*.rmD"
+          },
+          {
+            "filenamePattern": "*.RMd"
+          },
+          {
+            "filenamePattern": "*.RmD"
+          },
+          {
+            "filenamePattern": "*.rMD"
+          },
+          {
+            "filenamePattern": "*.RMD"
+          },
+          {
+            "filenamePattern": "*.qmd"
+          },
+          {
+            "filenamePattern": "*.Qmd"
+          },
+          {
+            "filenamePattern": "*.qMd"
+          },
+          {
+            "filenamePattern": "*.qmD"
+          },
+          {
+            "filenamePattern": "*.QMd"
+          },
+          {
+            "filenamePattern": "*.QmD"
+          },
+          {
+            "filenamePattern": "*.qMD"
+          },
+          {
+            "filenamePattern": "*.QMD"
           }
         ]
       }

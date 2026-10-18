@@ -44,7 +44,7 @@ exports.run = async () => {
   const port = (await fs.readFile(path.join(process.env.R_NOTEBOOK_TEST_PROFILE, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
   const connections = new Map();
   let currentMarkupId;
-  async function inspect(expression) {
+  async function inspect(expression, notebookOnly = true) {
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     for (const target of targets.filter(target => ['page', 'iframe'].includes(target.type))) {
       if (!connections.has(target.id)) connections.set(target.id, await connect(target.webSocketDebuggerUrl));
@@ -66,7 +66,7 @@ exports.run = async () => {
                 }
               }
               const all = selector => roots.flatMap(root => Array.from(root.querySelectorAll(selector)));
-              if (!all('[data-r-notebook-markup-id="' + ${JSON.stringify(currentMarkupId)} + '"]').length) return null;
+              if (${notebookOnly} && !all('[data-r-notebook-markup-id="' + ${JSON.stringify(currentMarkupId)} + '"]').length) return null;
               ${expression}
             })()`
           });
@@ -103,9 +103,9 @@ exports.run = async () => {
       console.log('Notebook rendering: supplied document has visible TOC links; no R code cells executed.');
       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
     }
-    for (const extension of ['qmd', 'Rmd']) {
-      const filename = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, `rendering.${extension}`);
-      const source = await fs.readFile(path.resolve(__dirname, `../../examples/rendering.${extension}`), 'utf8');
+    for (const [index, extension] of ['rmd', 'Rmd', 'RMD', 'qmd', 'QMD'].entries()) {
+      const filename = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, `rendering-${index}.${extension}`);
+      const source = require('./nativeFixtures.cjs').fixtureSource(extension);
       // The target must be outside the initially visible cells, exercising host navigation.
       const distant = Array.from({ length: 16 }, () => '\n```{r}\n1 + 1\n```\n\nSome text.\n').join('') + '\n# Distant heading\n\nReached the distant section.\n';
       await fs.writeFile(filename, source + distant);
@@ -149,6 +149,17 @@ exports.run = async () => {
       await until(() => editor.visibleRanges.some(range => range.start <= target.index && target.index < range.end), `${extension}: TOC did not reveal the distant cell`);
       await until(async () => (await inspect(`return all('#distant-heading').some(heading => heading.getBoundingClientRect().height > 0);`)).some(Boolean), `${extension}: distant heading did not render`);
       console.log(`Notebook rendering: ${extension} TOC visible, notebook theme retained, header stable during refresh; links reveal distant cells.`);
+      const reopen = vscode.commands.executeCommand('workbench.action.reopenWithEditor');
+      await until(async () => (await inspect(`
+        const picker = document.querySelector('.quick-input-widget');
+        if (!picker || !picker.getBoundingClientRect().height) return false;
+        const labels = [picker.innerText, ...Array.from(picker.querySelectorAll('[title], [aria-label]'),
+          element => (element.getAttribute('title') || '') + (element.getAttribute('aria-label') || ''))].join(' ');
+        return labels.toLowerCase().includes("configure default editor for '*.${extension.toLowerCase()}'") &&
+          !/\\[[rRqQmMdD]+\\]/.test(labels);
+      `, false)).some(Boolean), `${extension}: readable Set Default action was not shown`);
+      await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+      await reopen;
       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
     }
   } finally {
