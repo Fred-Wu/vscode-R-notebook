@@ -35,10 +35,6 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Install `bookdown` when an R Markdown document uses a `bookdown::` output format.
 - Install [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r).
 - Install [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
-- Configure the vscode-R path for your platform:
-  - Windows: `r.rpath.windows`
-  - macOS: `r.rpath.mac`
-  - Linux: `r.rpath.linux`
 - Alternatively, make R available through `R_HOME` or `PATH`.
 - Install the Quarto CLI for `.qmd` notebooks.
 - Set `r.notebook.quartoPath` if Quarto is not on the R session's `PATH`.
@@ -93,21 +89,6 @@ headings such as `# Introduction` and `## Details`, rather than code-cell labels
 - Use a vscode-R version supporting these APIs (v3.2.0 or later).
 - Disable `r.notebook.rExtensionIntegration` to run without vscode-R session integration.
 
-## Configuration
-
-R code cells use the R `languageserver` package for completion, hover, signature help,
-diagnostics, navigation, rename, formatting and other supported LSP features. Install
-it in the configured R environment with `install.packages("languageserver")`.
-The notebook starts a separate language-server process for each open notebook and
-stops it when the notebook closes. It uses vscode-R's R executable resolver and the
-`r.lsp.args`, `r.lsp.lang`, `r.lsp.debug`, `r.lsp.diagnostics`, `r.libPaths` and
-`r.useRenvLibPath` settings. Set `r.lsp.enabled` to `false`
-to disable it. Language features do not require the notebook's execution session
-to be attached. Startup errors appear in **R Notebook Language Server** output.
-Cells use the **R (Notebook)** language mode, sharing vscode-R's R syntax grammar.
-This keeps notebook requests separate from vscode-R's text-editor providers;
-saved documents still contain ordinary `{r}` chunks. Editor settings specific to
-this mode can be placed under `[r-notebook-r]`.
 
 | Setting                                     | Default | Purpose                                                    |
 | ------------------------------------------- | ------- | ---------------------------------------------------------- |
@@ -128,20 +109,6 @@ this mode can be placed under `[r-notebook-r]`.
 - `bookdown` when required — Supports `bookdown::` R Markdown formats.
 
 ## Development Note
-
-Run `npm run test:integration` to test the language service in an isolated VS Code
-profile using the installed R extensions and a real R language server. Set
-`VSCODE_EXECUTABLE` to the VS Code executable (for example, `Code.exe` on Windows).
-Optionally set `R_EXECUTABLE` and `VSCODE_EXTENSIONS_DIR`. The test covers `.rmd`
-and `.qmd` cells, edits, language features, URI mapping and ordinary R documents.
-Set `R_LSP_MULTI_SERVER=true` to also exercise vscode-R's multiple-server mode.
-
-Run `npm run test:integration:rendering` with the same environment to check the
-TOC in the actual VS Code notebook webview across `.rmd`, `.Rmd`, `.RMD`, `.qmd`
-and `.QMD`, including headings immediately after introductory text and navigation
-to cells outside the initial viewport. R Markdown, Pandoc,
-and Quarto must be available. The test uses a temporary profile and a local
-Chromium debugging port to inspect the rendered cells.
 
 This extension's source code was written with assistance from GPT models using OpenAI's Codex. The overall feature design and logic decisions are mine; GPT models were used to generate and iterate on the implementation.
 

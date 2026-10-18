@@ -312,6 +312,7 @@
     "test:integration": "npm run compile && node scripts/test-integration.js",
     "test:integration:viewers": "npm run compile && node scripts/test-integration.js viewers",
     "test:integration:rendering": "npm run compile && node scripts/test-integration.js rendering",
+    "test:integration:yaml": "npm run compile && node scripts/test-integration.js yamlCompletions",
     "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",

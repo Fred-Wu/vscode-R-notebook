@@ -325,6 +325,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("r.rpath") ||
+        event.affectsConfiguration("r.executablePath") ||
         event.affectsConfiguration("r.notebook.quartoPath")
       ) {
         optionCompletions.clear();

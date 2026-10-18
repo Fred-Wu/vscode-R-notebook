@@ -7,7 +7,8 @@ const { createWriteStream } = require('node:fs');
 
 async function main() {
   const suite = process.argv[2] || 'languageService';
-  if (!['languageService', 'viewers', 'rendering'].includes(suite)) throw new Error(`Unknown integration suite: ${suite}`);
+  if (!['languageService', 'viewers', 'rendering', 'yamlCompletions'].includes(suite)) throw new Error(`Unknown integration suite: ${suite}`);
+  const inspectUI = suite === 'rendering' || suite === 'yamlCompletions';
   const viewers = suite === 'viewers';
   const executable = process.env.VSCODE_EXECUTABLE;
   if (!executable) throw new Error('Set VSCODE_EXECUTABLE to the VS Code executable (Code.exe on Windows).');
@@ -36,15 +37,19 @@ async function main() {
       'r.lsp.enabled': !viewers,
       'r.lsp.multiServer': process.env.R_LSP_MULTI_SERVER === 'true',
       'extensions.autoUpdate': false,
+      ...(suite === 'yamlCompletions' ? {
+        'editor.wordBasedSuggestions': 'off',
+        '[markdown]': { 'editor.quickSuggestions': false }
+      } : {}),
       ...(process.env.R_EXECUTABLE ? { 'r.executablePath': process.env.R_EXECUTABLE } : {})
     }));
     const env = { ...process.env };
-    if (suite === 'rendering') env.R_NOTEBOOK_TEST_PROFILE = profile;
+    if (inspectUI) env.R_NOTEBOOK_TEST_PROFILE = profile;
     delete env.ELECTRON_RUN_AS_NODE;
     const log = createWriteStream(path.join(root, 'vscode.log'));
     const code = await new Promise((resolve, reject) => {
       const child = spawn(executable, ['--new-window', '--skip-welcome', '--skip-release-notes',
-        ...(suite === 'rendering' ? ['--remote-debugging-port=0'] : []),
+        ...(inspectUI ? ['--remote-debugging-port=0'] : []),
         '--disable-workspace-trust', '--disable-gpu', `--user-data-dir=${profile}`,
         `--extensions-dir=${extensions}`, `--extensionDevelopmentPath=${path.resolve(__dirname, '..')}`,
         `--extensionTestsPath=${path.resolve(__dirname, `../test/integration/${suite}.cjs`)}`, workspace],
