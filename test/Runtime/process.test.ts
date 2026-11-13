@@ -4,7 +4,7 @@ import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { HiddenRProcess } from "../../src/Runtime/process";
+import { HiddenRProcess, type HiddenRLaunchOptions } from "../../src/Runtime/process";
 
 const FAKE_R_PROCESS = String.raw`
 const fs = require("node:fs");
@@ -27,6 +27,11 @@ process.stdin.on("data", (chunk) => {
     if (command === "init") process.stdout.write("READY " + process.pid + "\n");
     if (command === "set") state = argument;
     if (command === "write") fs.writeFileSync(argument, state);
+    if (command === "spawn") {
+      const child = require("node:child_process").spawn(process.execPath,
+        ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });
+      fs.writeFileSync(argument, String(child.pid));
+    }
     if (command === "exit") process.exit(9);
     newline = input.indexOf("\n");
   }
@@ -65,9 +70,8 @@ test("keeps state in one hidden process and isolates different processes", async
     (running) => firstRunningStates.push(running)
   );
   const second = new HiddenRProcess(launchOptions, () => undefined);
-  t.after(() => {
-    first.dispose();
-    second.dispose();
+  t.after(async () => {
+    await Promise.all([first.dispose(), second.dispose()]);
     return fsPromises.rm(directory, { recursive: true, force: true });
   });
 
@@ -121,8 +125,8 @@ test("reports when an initialised R process starts and stops", async (t) => {
     () => undefined,
     (running) => runningStates.push(running)
   );
-  t.after(() => {
-    hiddenProcess.dispose();
+  t.after(async () => {
+    await hiddenProcess.dispose();
     return fsPromises.rm(directory, { recursive: true, force: true });
   });
 
@@ -162,8 +166,8 @@ test("interrupts work without replacing the hidden process", async (t) => {
     }),
     () => undefined
   );
-  t.after(() => {
-    hiddenProcess.dispose();
+  t.after(async () => {
+    await hiddenProcess.dispose();
     return fsPromises.rm(directory, { recursive: true, force: true });
   });
 
@@ -199,4 +203,79 @@ test("interrupts work without replacing the hidden process", async (t) => {
   const stopped = await hiddenProcess.send("exit");
   await assert.rejects(stopped.failure, /exited with code 9/);
   stopped.dispose();
+});
+
+test("disposal during launch preparation releases the late preparation without spawning", async () => {
+  let release!: (options: HiddenRLaunchOptions) => void;
+  let disposed = 0;
+  const options = new Promise<HiddenRLaunchOptions>((resolve) => { release = resolve; });
+  const process = new HiddenRProcess(() => options, () => undefined);
+  const starting = process.start();
+  process.dispose();
+  release({
+    executable: "must-not-spawn", args: [], cwd: os.tmpdir(), env: {},
+    initialization: {
+      command: "init", successMarker: "READY ", failureMarker: "FAILED ",
+      preparation: { dispose() { disposed++; } },
+    },
+  });
+  await assert.rejects(starting, /session has closed/);
+  assert.equal(disposed, 1);
+  assert.equal(process.running, false);
+});
+
+for (const failure of ["spawn", "invalid executable", "initialization"] as const) {
+  test(`releases attachment preparation exactly once on ${failure} failure`, async (t) => {
+    let disposed = 0;
+    const hidden = new HiddenRProcess(async () => ({
+      executable: failure === "initialization" ? process.execPath
+        : failure === "spawn" ? path.join(os.tmpdir(), "nonexistent-r-notebook-executable") : "",
+      args: ["-e", 'process.stdin.on("data", () => process.stdout.write("FAILED expected failure\\n"));'],
+      cwd: os.tmpdir(), env: { ...process.env },
+      initialization: {
+        command: "init", successMarker: "READY ", failureMarker: "FAILED ",
+        preparation: { dispose() { disposed++; } },
+      },
+    }), () => undefined);
+    t.after(() => hidden.dispose());
+    await assert.rejects(hidden.start());
+    hidden.dispose();
+    assert.equal(disposed, 1);
+    assert.equal(hidden.running, false);
+  });
+}
+
+test("shutdown terminates render subprocesses as well as their parent", async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-tree-test-"));
+  const hidden = new HiddenRProcess(async () => ({
+    executable: process.execPath, args: ["-e", FAKE_R_PROCESS],
+    cwd: directory, env: { ...process.env },
+  }), () => undefined);
+  let childPid: number | undefined;
+  t.after(async () => {
+    await hidden.dispose();
+    if (childPid) {
+      try { process.kill(childPid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+    await fsPromises.rm(directory, { recursive: true, force: true });
+  });
+  const pidFile = path.join(directory, "child.pid");
+  const spawned = waitForFile(pidFile);
+  (await hidden.send(`spawn ${pidFile}`)).dispose();
+  await spawned;
+  childPid = Number(await fsPromises.readFile(pidFile, "utf8"));
+  assert.ok(childPid > 0);
+  await hidden.dispose();
+  // POSIX can briefly retain the killed child until its new parent reaps it.
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { process.kill(childPid, 0); }
+    catch (error) {
+      assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
+      childPid = undefined;
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("A render subprocess survived notebook shutdown");
 });

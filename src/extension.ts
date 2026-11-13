@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency } from "./Notebook/renderDependencies";
+import { changedMarkupRequiresRefresh } from "./Notebook/markdownRefresh";
 import {
   NOTEBOOK_TYPE,
   type RNotebookCellMetadata,
@@ -31,6 +33,7 @@ import {
 
 const stateSaves = new Map<string, Promise<void>>();
 let languageService: RNotebookLanguageService | undefined;
+let notebookController: RNotebookController | undefined;
 
 function isNotebookCell(value: unknown): value is vscode.NotebookCell {
   return Boolean(
@@ -204,6 +207,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
+  notebookController = controller;
   const editing = new RNotebookEditing();
   const markdownMessaging = vscode.notebooks.createRendererMessaging(
     "r-notebook-markdown-renderer"
@@ -216,6 +220,9 @@ export function activate(context: vscode.ExtensionContext): void {
   languageService = new RNotebookLanguageService(context.asAbsolutePath("resources/r/language_server.R"));
   const yamlWatcher = vscode.workspace.createFileSystemWatcher(
     "**/*.{yml,yaml}"
+  );
+  const renderDependencyWatcher = vscode.workspace.createFileSystemWatcher(
+    "**/*.{bib,csl,css,scss,md,markdown,[qQrR][mM][dD],html,htm,js,svg,lua,py}"
   );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
@@ -243,6 +250,31 @@ export function activate(context: vscode.ExtensionContext): void {
         });
       }
     });
+  };
+  const refreshRenderDependency = (uri: vscode.Uri): void => {
+    if (!isTextRenderDependency(uri.fsPath)) {
+      return;
+    }
+    for (const notebook of vscode.workspace.notebookDocuments) {
+      if (notebook.notebookType !== NOTEBOOK_TYPE ||
+          notebook.uri.scheme !== "file") {
+        continue;
+      }
+      const directlyReferenced = notebook.getCells().some((cell) =>
+        sourceReferencesDependency(cell.document.getText(), uri.fsPath)
+      );
+      const projectMatch = directlyReferenced
+        ? Promise.resolve(true)
+        : isQuartoNotebook(notebook.uri.fsPath)
+          ? quartoProjectReferencesDependency(notebook.uri.fsPath, uri.fsPath)
+          : Promise.resolve(false);
+      void projectMatch.then((matched) =>
+        matched ? controller.refreshMarkdown(notebook) : undefined
+      ).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[Markdown] Could not refresh dependent resources: ${message}`);
+      });
+    }
   };
   vscode.workspace.notebookDocuments.forEach((notebook) =>
     markdownCompletions.prepareQuarto(notebook)
@@ -276,6 +308,10 @@ export function activate(context: vscode.ExtensionContext): void {
     cellStatusBar,
     markdownCompletions,
     yamlWatcher,
+    renderDependencyWatcher,
+    renderDependencyWatcher.onDidChange(refreshRenderDependency),
+    renderDependencyWatcher.onDidCreate(refreshRenderDependency),
+    renderDependencyWatcher.onDidDelete(refreshRenderDependency),
     yamlWatcher.onDidChange(refreshYamlDependencies),
     yamlWatcher.onDidCreate(refreshYamlDependencies),
     yamlWatcher.onDidDelete(refreshYamlDependencies),
@@ -291,6 +327,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("r.rpath") ||
+        event.affectsConfiguration("r.executablePath") ||
         event.affectsConfiguration("r.notebook.quartoPath")
       ) {
         optionCompletions.clear();
@@ -321,6 +358,10 @@ export function activate(context: vscode.ExtensionContext): void {
         typeof request.label === "string"
       ) {
         const target = editor.notebook.getCells().find((cell) => {
+          if (typeof request.markupId === "string") {
+            return cell.kind === vscode.NotebookCellKind.Markup &&
+              (cell.metadata as RNotebookCellMetadata).rNotebookMarkdown?.id === request.markupId;
+          }
           if (cell.kind !== vscode.NotebookCellKind.Code) {
             return false;
           }
@@ -332,6 +373,13 @@ export function activate(context: vscode.ExtensionContext): void {
             new vscode.NotebookRange(target.index, target.index + 1),
             vscode.NotebookEditorRevealType.InCenter
           );
+          if (typeof request.markupId === "string") {
+            await markdownMessaging.postMessage({
+              type: "rNotebook.revealAnchor",
+              label: request.label,
+              markupId: request.markupId,
+            }, editor);
+          }
         }
         return;
       }
@@ -352,6 +400,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await markdownMessaging.postMessage({
           type: "rNotebook.textResult",
           requestId: request.requestId,
+          documentId: editor.notebook.uri.toString(),
           ...result,
         }, editor);
       } catch (error) {
@@ -363,6 +412,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await markdownMessaging.postMessage({
           type: "rNotebook.textResult",
           requestId: request.requestId,
+          documentId: editor.notebook.uri.toString(),
           error: message,
         }, editor);
       }
@@ -548,7 +598,8 @@ export function activate(context: vscode.ExtensionContext): void {
         prepareNotebook(notebook);
       }
       const codeOptionsChanged = controller.markdownCodeOptionsChanged(notebook);
-      if (contentChanges.length > 0 || codeOptionsChanged) {
+      if (contentChanges.length > 0 || codeOptionsChanged ||
+          changedMarkupRequiresRefresh(cellChanges)) {
         void controller.refreshMarkdown(notebook).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           output.appendLine(`[Markdown] Could not refresh changed notebook text: ${message}`);
@@ -677,7 +728,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       if (await vscode.window.tabGroups.close(tabs)) {
-        controller.shutdownSession(notebookUri);
+        await controller.shutdownSession(notebookUri);
       }
     })
   );
@@ -703,6 +754,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  await notebookController?.dispose();
   await languageService?.stop();
   while (stateSaves.size > 0) {
     await Promise.all(stateSaves.values());

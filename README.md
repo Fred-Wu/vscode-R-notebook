@@ -10,6 +10,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Use a separate R session for each notebook.
 - Start the notebook's R session automatically when it becomes active.
 - Display Markdown cells with headings, references, and inline R results.
+- Display YAML title, author, and date metadata, plus a clickable table of contents when enabled.
 - Edit cell labels and options from the cell toolbar.
 - Show suggestions based on installed R and Quarto tools and notebook content.
 - Send code cells to [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
@@ -34,11 +35,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Install `bookdown` when an R Markdown document uses a `bookdown::` output format.
 - Install [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r).
 - Install [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
-- Configure the vscode-R path for your platform:
-  - Windows: `r.rpath.windows`
-  - macOS: `r.rpath.mac`
-  - Linux: `r.rpath.linux`
-- Alternatively, make R available through `R_HOME` or `PATH`.
+- Configure R through vscode-R's `r.executablePath` setting, or make R available through `R_HOME` or `PATH`.
 - Install the Quarto CLI for `.qmd` notebooks.
 - Set `r.notebook.quartoPath` if Quarto is not on the R session's `PATH`.
 - Make Pandoc available to `rmarkdown` for R Markdown-cell display.
@@ -56,6 +53,19 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Treat `#|` pipe values as the winner when R Markdown options conflict.
 - Store Quarto cell options in `#|` pipe lines.
 
+The first Markdown cell displays the document's title, author, and date using the
+native renderer's formatting. When the YAML enables a table of contents (`toc: true`
+in the HTML format options), it appears below the title block and before the body.
+TOC links reveal the notebook cell containing the heading. TOC depth and section
+numbering follow the YAML settings. The YAML source remains available in the
+collapsible **YAML front matter** section; the displayed header and TOC are not
+added to the saved document.
+
+The notebook preview uses HTML even when the publishing output is Word or PDF.
+Explicit HTML outline settings take precedence; otherwise portable outline
+settings from the selected publishing format are used. The TOC lists Markdown
+headings such as `# Introduction` and `## Details`, rather than code-cell labels.
+
 ## R Sessions
 
 - Use **Restart R** to start a fresh session.
@@ -66,34 +76,50 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 
 ## vscode-R Integration
 
-- Run inline code and display Markdown cells without the vscode-R session watcher.
-- Enable both settings to use vscode-R's managed `sess` API for workspace, data, and help viewers:
+Each notebook owns a separate inline R process. With integration enabled, that
+process attaches automatically to vscode-R, allowing its workspace, data, and
+help viewers to follow the selected notebook. Switching notebooks selects the
+corresponding session without sharing R objects between them.
 
-  ```json
+Both settings must be enabled (the defaults):
+
+```json
+{
   "r.sessionWatcher": true,
   "r.notebook.rExtensionIntegration": true
-  ```
+}
+```
 
-- Reload the VS Code window after changing either setting.
-- Notebook session attachment uses vscode-R's public `session.prepareAttachment()` and `session.activate()` APIs, with its managed `sess` package. First-time installation may require consent.
-- Use a vscode-R version supporting these APIs (v3.2.0 or later).
-- Disable `r.notebook.rExtensionIntegration` to run without vscode-R session integration.
+Reload the VS Code window after changing either setting. Integration requires a
+vscode-R build exposing the public managed `sess` attachment API. vscode-R manages
+the matching R package; first-time installation may require consent. Notebook
+attachment is automatic, so no attachment command is needed in notebook cells.
 
-## Configuration
+To inspect an object, run its defining cell in the notebook, then use
+`utils::View(object)` in a notebook cell or the **View in R Notebook** action on
+a top-level object in the R Workspace Viewer. Data frames and lists use
+vscode-R's viewers. Viewer requests wait for any running notebook execution.
 
-R code cells use the R `languageserver` package for completion, hover, signature help,
-diagnostics, navigation, rename, formatting and other supported LSP features. Install
-it in the configured R environment with `install.packages("languageserver")`.
-The notebook starts a separate language-server process for each open notebook and
-stops it when the notebook closes. It uses vscode-R's R executable resolver and the
-`r.lsp.args`, `r.lsp.lang`, `r.lsp.debug`, `r.lsp.diagnostics`, `r.libPaths` and
-`r.useRenvLibPath` settings. Set `r.lsp.enabled` to `false`
-to disable it. Language features do not require the notebook's execution session
-to be attached. Startup errors appear in **R Notebook Language Server** output.
-Cells use the **R (Notebook)** language mode, sharing vscode-R's R syntax grammar.
-This keeps notebook requests separate from vscode-R's text-editor providers;
-saved documents still contain ordinary `{r}` chunks. Editor settings specific to
-this mode can be placed under `[r-notebook-r]`.
+**Run Cell in R Console** uses a separate interactive R Console session. It has
+its own objects and can become the session shown by vscode-R. Select the notebook
+again to return the viewers to its inline session. **Restart R** and **Shutdown
+and Close** operate on the notebook's inline session; closing its tab normally
+retains that session according to `r.notebook.sessionShutdownDelayMinutes`.
+Reloading or closing the VS Code window stops notebook-owned sessions.
+
+Set `r.notebook.rExtensionIntegration` to `false` and reload to use inline
+execution and Markdown rendering without automatic viewer attachment. vscode-R
+remains an extension dependency and still provides R executable discovery.
+This setting is separate from notebook language features, which use
+`r.lsp.enabled` and the R package `languageserver`.
+
+If integration does not start:
+
+- Check both settings above and reload after changing them.
+- If the error says vscode-R does not expose the `sess` attachment API, install a compatible vscode-R build.
+- Check **Output → R Notebook Kernel** and vscode-R's output for R startup errors or pending package-installation consent.
+- If the viewers show another session, select the notebook and ensure the object was created by inline execution.
+
 
 | Setting                                     | Default | Purpose                                                    |
 | ------------------------------------------- | ------- | ---------------------------------------------------------- |
@@ -114,13 +140,6 @@ this mode can be placed under `[r-notebook-r]`.
 - `bookdown` when required — Supports `bookdown::` R Markdown formats.
 
 ## Development Note
-
-Run `npm run test:integration` to test the language service in an isolated VS Code
-profile using the installed R extensions and a real R language server. Set
-`VSCODE_EXECUTABLE` to the VS Code executable (for example, `Code.exe` on Windows).
-Optionally set `R_EXECUTABLE` and `VSCODE_EXTENSIONS_DIR`. The test covers `.rmd`
-and `.qmd` cells, edits, language features, URI mapping and ordinary R documents.
-Set `R_LSP_MULTI_SERVER=true` to also exercise vscode-R's multiple-server mode.
 
 This extension's source code was written with assistance from GPT models using OpenAI's Codex. The overall feature design and logic decisions are mine; GPT models were used to generate and iterate on the implementation.
 

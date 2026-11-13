@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { rMarkdownFormatsExpression, type RMarkdownFormats } from "./rMarkdownYaml";
 import {
   quartoExecutableSetting,
   resolveRExecutable,
@@ -32,12 +33,13 @@ const R_MARKDOWN_OPTIONS_EXPRESSION = [
   "}",
 ].join("\n");
 
-function execute(command: string, args: string[]): Promise<string> {
+function execute(command: string, args: string[], input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, {
+    const child = execFile(command, args, {
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024,
       windowsHide: true,
+      ...(input === undefined ? {} : { timeout: 30000 }),
     }, (error, stdout) => {
       if (error) {
         reject(error);
@@ -45,12 +47,20 @@ function execute(command: string, args: string[]): Promise<string> {
         resolve(stdout);
       }
     });
+    if (input !== undefined) {
+      child.stdin?.on("error", reject);
+      child.stdin?.end(input);
+    }
   });
 }
 
 export function configuredQuartoExecutable(notebookUri: vscode.Uri): string {
   return quartoExecutableSetting(notebookUri) ||
     (process.platform === "win32" ? "quarto.exe" : "quarto");
+}
+
+export async function loadRMarkdownYamlFormats(rExecutable: string): Promise<RMarkdownFormats> {
+  return JSON.parse(await execute(rExecutable, ["--vanilla", "--slave"], rMarkdownFormatsExpression)) as RMarkdownFormats;
 }
 
 export async function quartoInstallationPaths(quarto: string): Promise<string[]> {

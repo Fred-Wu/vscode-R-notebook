@@ -7,6 +7,7 @@ import { NOTEBOOK_TYPE, type RNotebookCellMetadata } from "./document";
 import { codeCellRenderOptions } from "./options";
 import {
   configuredQuartoExecutable,
+  loadRMarkdownYamlFormats,
   quartoInstallationPaths,
 } from "./optionCompletions";
 import {
@@ -24,6 +25,11 @@ import {
   type QuartoAttributeGroup,
 } from "./quartoAttributes";
 import { isQuartoNotebook } from "../notebookFile";
+import { resolveRExecutable } from "../Runtime/launch";
+import {
+  defaultRMarkdownFormats, rMarkdownYamlContext, rMarkdownYamlSuggestions,
+  type RMarkdownFormats,
+} from "./rMarkdownYaml";
 
 interface QuartoCompletion {
   type?: "key" | "value";
@@ -76,6 +82,7 @@ export class RNotebookMarkdownCompletionProvider implements
   private readonly quartoInspections =
     new Map<string, Promise<CachedQuartoInspection>>();
   private readonly quartoInspectionErrors = new Set<string>();
+  private readonly rMarkdownFormats = new Map<string, Promise<RMarkdownFormats>>();
   private readonly yamlCompletionChanges: vscode.Disposable;
 
   constructor(private readonly output: vscode.OutputChannel) {
@@ -99,7 +106,6 @@ export class RNotebookMarkdownCompletionProvider implements
       );
       if (
         !context ||
-        !context.isQuarto ||
         !this.isFrontMatterPosition(context.cell, event.document, position) ||
         !this.startsYamlCompletionToken(
           event.document,
@@ -162,7 +168,7 @@ export class RNotebookMarkdownCompletionProvider implements
     }
 
     if (!isQuarto) {
-      return new vscode.CompletionList();
+      return this.rMarkdownCompletions(notebook.uri, source, position, token);
     }
 
     const [support, formats] = await Promise.all([
@@ -221,6 +227,7 @@ export class RNotebookMarkdownCompletionProvider implements
   }
 
   clear(): void {
+    this.rMarkdownFormats.clear();
     this.quartoModules.clear();
     this.invalidateQuartoFormats();
   }
@@ -245,8 +252,41 @@ export class RNotebookMarkdownCompletionProvider implements
 
   dispose(): void {
     this.yamlCompletionChanges.dispose();
-    this.quartoModules.clear();
-    this.invalidateQuartoFormats();
+    this.clear();
+  }
+
+  private async rMarkdownCompletions(
+    uri: vscode.Uri, source: string, position: vscode.Position, token: vscode.CancellationToken
+  ): Promise<vscode.CompletionList> {
+    const context = rMarkdownYamlContext(source, position.line, position.character);
+    if (!context) return new vscode.CompletionList();
+    let formats = defaultRMarkdownFormats;
+    if (context.parents[0] === "output" || context.key === "output") {
+      try {
+        const executable = resolveRExecutable(uri);
+        let pending = this.rMarkdownFormats.get(executable);
+        if (!pending) {
+          pending = loadRMarkdownYamlFormats(executable).catch((error: unknown) => {
+            this.output.appendLine(`[Markdown completion] Could not load R Markdown formats: ${String(error)}`);
+            return defaultRMarkdownFormats;
+          });
+          this.rMarkdownFormats.set(executable, pending);
+        }
+        formats = await pending;
+      } catch {
+        // Basic header fields and format names also work without a configured R.
+      }
+    }
+    if (token.isCancellationRequested) return new vscode.CompletionList();
+    return new vscode.CompletionList(rMarkdownYamlSuggestions(context, formats).map(candidate => {
+      const item = new vscode.CompletionItem(candidate.label,
+        candidate.value ? vscode.CompletionItemKind.Value : vscode.CompletionItemKind.Field);
+      item.insertText = candidate.insertText;
+      item.range = new vscode.Range(position.line, context.start, position.line, context.end);
+      item.documentation = candidate.description;
+      if (candidate.suggestValues) item.command = { command: "editor.action.triggerSuggest", title: "Suggest values" };
+      return item;
+    }), false);
   }
 
   private startsYamlCompletionToken(

@@ -4,8 +4,27 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 
 const execFileAsync = promisify(execFile);
+
+function terminalExecutable(options: HiddenRLaunchOptions): string {
+  if (process.platform !== "win32" || !/^R(?:\.exe)?$/i.test(path.basename(options.executable))) {
+    return options.executable;
+  }
+  // Windows R.exe launches Rterm through wrapper processes. Own Rterm directly
+  // so interrupts and shutdown target the interpreter rather than its launcher.
+  const candidates = path.dirname(options.executable) !== "."
+    ? [options.executable]
+    : (options.env.PATH ?? options.env.Path ?? "").split(path.delimiter)
+      .map((directory) => path.join(directory, "R.exe"));
+  const executable = candidates.find(existsSync);
+  if (!executable) return options.executable;
+  const directory = path.dirname(executable);
+  return [path.join(directory, "Rterm.exe"), path.join(directory, "x64", "Rterm.exe")]
+    .find(existsSync) ?? options.executable;
+}
 
 export interface InlineDispatch {
   failure: Promise<never>;
@@ -45,7 +64,9 @@ async function interruptWindowsRProcess(
         "--no-init-file",
         "-e",
         "if (!requireNamespace('ps', quietly = TRUE)) stop(\"The R package 'ps' is required to cancel notebook execution on Windows.\"); "
-          + `ps::ps_interrupt(ps::ps_handle(${processId}))`,
+          // CTRL+C can be inherited as ignored by a hidden Windows process.
+          // CTRL+BREAK reaches Rterm's interrupt handler in that case too.
+          + `ps::ps_interrupt(ps::ps_handle(${processId}), ctrl_c = FALSE)`,
       ],
       {
         cwd: options.cwd,
@@ -75,6 +96,29 @@ function isRunning(child: ChildProcessWithoutNullStreams): boolean {
   return child.exitCode === null && child.signalCode === null;
 }
 
+async function terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (!isRunning(child) || child.pid === undefined) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  if (process.platform === "win32") {
+    // R can be waiting for Pandoc or Quarto. Killing only R leaves those
+    // children and their inherited file handles alive.
+    try {
+      await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true, timeout: 10000,
+      });
+    } catch (error) {
+      if (isRunning(child)) throw error;
+    }
+  } else {
+    // Inline R owns a process group, including any render subprocesses.
+    try { process.kill(-child.pid, "SIGKILL"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  await exited;
+}
+
 export class HiddenRProcess implements InlineRTransport {
   private child: ChildProcessWithoutNullStreams | undefined;
   private starting: Promise<ChildProcessWithoutNullStreams> | undefined;
@@ -84,6 +128,7 @@ export class HiddenRProcess implements InlineRTransport {
   private rProcessId: number | undefined;
   private ready = false;
   private disposed = false;
+  private stopping?: Promise<void>;
 
   constructor(
     private readonly launchOptions: () => Promise<HiddenRLaunchOptions>,
@@ -214,19 +259,29 @@ export class HiddenRProcess implements InlineRTransport {
   private async launch(): Promise<ChildProcessWithoutNullStreams> {
     const options = await this.launchOptions();
     if (this.disposed) {
+      options.initialization?.preparation?.dispose();
       throw new Error("The notebook's inline R session has closed.");
     }
+    options.executable = terminalExecutable(options);
 
     this.log(`Starting ${options.executable}`);
-    const child = spawn(options.executable, options.args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false,
-      stdio: "pipe",
-      windowsHide: true,
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(options.executable, options.args, {
+        cwd: options.cwd,
+        env: options.env,
+        shell: false,
+        stdio: "pipe",
+        windowsHide: true,
+        detached: process.platform !== "win32",
+      });
+    } catch (error) {
+      options.initialization?.preparation?.dispose();
+      throw error;
+    }
     this.child = child;
     this.currentLaunchOptions = options;
+    this.currentInitialization = options.initialization;
 
     child.stdout.resume();
     child.stderr.on("data", (data: Buffer) => {
@@ -274,14 +329,12 @@ export class HiddenRProcess implements InlineRTransport {
       throw exitError(child.exitCode, child.signalCode);
     }
     if (options.initialization) {
-      this.currentInitialization = options.initialization;
       try {
         this.rProcessId = await this.initialize(child, options.initialization);
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
-        options.initialization.preparation?.dispose();
         this.clearProcess(child);
-        if (isRunning(child)) child.kill();
+        await terminate(child);
         throw error;
       }
     }
@@ -452,9 +505,9 @@ export class HiddenRProcess implements InlineRTransport {
     return this.currentInterruption;
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
     if (this.disposed) {
-      return;
+      return this.stopping ?? Promise.resolve();
     }
     this.disposed = true;
     const child = this.child;
@@ -469,9 +522,10 @@ export class HiddenRProcess implements InlineRTransport {
     if (wasRunning) {
       this.runningChanged(false);
     }
-    if (child && isRunning(child)) {
-      child.stdin.end();
-      child.kill();
-    }
+    this.stopping = child ? terminate(child) : Promise.resolve();
+    // VS Code can call dispose without awaiting it. Keep failures observable
+    // while still returning the promise to explicit shutdown/deactivation.
+    void this.stopping.catch((error: unknown) => this.log(`Could not stop inline R: ${String(error)}`));
+    return this.stopping;
   }
 }

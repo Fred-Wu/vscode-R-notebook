@@ -92,7 +92,52 @@
         "displayName": "R Notebook Editor",
         "selector": [
           {
-            "filenamePattern": "*.[rRqQ][mM][dD]"
+            "filenamePattern": "*.rmd"
+          },
+          {
+            "filenamePattern": "*.Rmd"
+          },
+          {
+            "filenamePattern": "*.rMd"
+          },
+          {
+            "filenamePattern": "*.rmD"
+          },
+          {
+            "filenamePattern": "*.RMd"
+          },
+          {
+            "filenamePattern": "*.RmD"
+          },
+          {
+            "filenamePattern": "*.rMD"
+          },
+          {
+            "filenamePattern": "*.RMD"
+          },
+          {
+            "filenamePattern": "*.qmd"
+          },
+          {
+            "filenamePattern": "*.Qmd"
+          },
+          {
+            "filenamePattern": "*.qMd"
+          },
+          {
+            "filenamePattern": "*.qmD"
+          },
+          {
+            "filenamePattern": "*.QMd"
+          },
+          {
+            "filenamePattern": "*.QmD"
+          },
+          {
+            "filenamePattern": "*.qMD"
+          },
+          {
+            "filenamePattern": "*.QMD"
           }
         ]
       }
@@ -261,10 +306,14 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit -p ./",
-    "test": "npm run test:unit && npm run test:r",
+    "test": "npm run test:unit && npm run test:render && npm run test:r && npm run test:runtime",
+    "test:runtime": "tsx --test test/Runtime/lifecycle.integration.ts",
+    "test:render": "node --test test/integration/renderCrossReferences.cjs test/integration/rendererBrowser.cjs",
     "test:unit": "tsx --test test/**/*.test.ts",
     "test:integration": "npm run compile && node scripts/test-integration.js",
     "test:integration:viewers": "npm run compile && node scripts/test-integration.js viewers",
+    "test:integration:rendering": "npm run compile && node scripts/test-integration.js rendering",
+    "test:integration:yaml": "npm run compile && node scripts/test-integration.js yamlCompletions",
     "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",

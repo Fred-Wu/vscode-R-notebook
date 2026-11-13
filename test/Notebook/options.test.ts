@@ -116,6 +116,14 @@ test("reads and updates leading Quarto pipe options", () => {
     "fig-aplot"
   );
   assert.equal(
+    codeCellLabel('#| label: "fig-quoted"\nplot(cars)\n', undefined),
+    "fig-quoted"
+  );
+  assert.equal(
+    codeCellLabel("#| label: 'tbl-quoted'\nhead(cars)\n", undefined),
+    "tbl-quoted"
+  );
+  assert.equal(
     codeCellLabel("plot(cars)\n", {
       openingFence: "```{r fig-rmarkdown}\n",
       closingFence: "```\n",
