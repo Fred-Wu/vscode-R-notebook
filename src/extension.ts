@@ -33,6 +33,7 @@ import {
 
 const stateSaves = new Map<string, Promise<void>>();
 let languageService: RNotebookLanguageService | undefined;
+let notebookController: RNotebookController | undefined;
 
 function isNotebookCell(value: unknown): value is vscode.NotebookCell {
   return Boolean(
@@ -206,6 +207,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     vscodeRSessionWatcherEnabled && notebookRExtensionIntegrationEnabled
   );
+  notebookController = controller;
   const editing = new RNotebookEditing();
   const markdownMessaging = vscode.notebooks.createRendererMessaging(
     "r-notebook-markdown-renderer"
@@ -726,7 +728,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       if (await vscode.window.tabGroups.close(tabs)) {
-        controller.shutdownSession(notebookUri);
+        await controller.shutdownSession(notebookUri);
       }
     })
   );
@@ -752,6 +754,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+  await notebookController?.dispose();
   await languageService?.stop();
   while (stateSaves.size > 0) {
     await Promise.all(stateSaves.values());

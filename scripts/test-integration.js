@@ -34,7 +34,7 @@ async function main() {
     await fs.writeFile(path.join(profile, 'User', 'settings.json'), JSON.stringify({
       'r.sessionWatcher': viewers,
       'r.notebook.rExtensionIntegration': viewers,
-      'r.lsp.enabled': !viewers,
+      'r.lsp.enabled': suite === 'languageService',
       'r.lsp.multiServer': process.env.R_LSP_MULTI_SERVER === 'true',
       'extensions.autoUpdate': false,
       ...(suite === 'yamlCompletions' ? {

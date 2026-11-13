@@ -268,3 +268,35 @@ paragraph_output <- r_notebook_inline_markdown(c(
   "A paragraph", "    with `r 2 + 2`."
 ), .GlobalEnv)
 stopifnot(grepl("    with 4.", paragraph_output, fixed = TRUE))
+
+# List continuation paragraphs use indentation relative to the item content.
+# Deeper indentation must still protect literal examples from execution.
+for (case in list(
+  list(prefix = c("- Item", ""), indent = 2L),
+  list(prefix = c("1. Item", ""), indent = 3L),
+  list(prefix = c("123. Item", ""), indent = 5L),
+  list(prefix = c("- Outer", "  - Inner", ""), indent = 4L),
+  list(prefix = c("- - Nested item", ""), indent = 4L),
+  list(prefix = c("> - Quoted item", ">"), indent = 2L, quote = "> ")
+)) {
+  quote <- if (is.null(case$quote)) "" else case$quote
+  prose <- paste0(quote, strrep(" ", case$indent + 2L), "Value is `r 1 + 1`.")
+  literal <- paste0(quote, strrep(" ", case$indent + 4L), "`r stop('list code executed')`")
+  rendered <- r_notebook_inline_markdown(c(case$prefix, prose, quote, literal), .GlobalEnv)
+  stopifnot(grepl("Value is 2.", rendered, fixed = TRUE))
+  stopifnot(grepl(literal, rendered, fixed = TRUE))
+}
+
+# Nested fences and leaving a list retain the same literal-code boundary.
+rendered <- r_notebook_inline_markdown(c(
+  "- Outer", "  - Inner", "", "    ```", "    `r stop('nested fence executed')`",
+  "    ```", "", "Outside `r 2 + 2`.", "", "    `r stop('top-level code executed')`"
+), .GlobalEnv)
+stopifnot(grepl("Outside 4.", rendered, fixed = TRUE))
+
+rendered <- r_notebook_inline_markdown(c(
+  "- Item", "", "\tValue is `r 1 + 1`.", "", "\t  `r stop('tab-indented code executed')`",
+  "", "-     `r stop('code after list marker executed')`", "", "Outside `r 2 + 2`."
+), .GlobalEnv)
+stopifnot(grepl("\tValue is 2.", rendered, fixed = TRUE))
+stopifnot(grepl("Outside 4.", rendered, fixed = TRUE))

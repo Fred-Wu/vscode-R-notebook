@@ -8,6 +8,7 @@ const test = require("node:test");
 
 const quarto = process.env.QUARTO_PATH || "quarto";
 const available = spawnSync(quarto, ["--version"], { encoding: "utf8" }).status === 0;
+if (process.env.CI) assert.ok(available, "CI requires Quarto for cross-reference regression tests");
 
 test("Quarto resolves cross-references to non-executable notebook figure placeholders",
   { skip: !available && "Quarto is not installed" }, () => {

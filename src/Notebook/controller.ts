@@ -91,6 +91,8 @@ export class RNotebookController implements vscode.Disposable {
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
   private executionOrder = 0;
+  private disposed = false;
+  private readonly stopping = new Set<Promise<void>>();
 
   constructor(
     private readonly helperPath: string,
@@ -109,6 +111,9 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   private getSession(notebook: vscode.NotebookDocument): NotebookSession {
+    if (this.disposed || notebook.isClosed) {
+      throw new Error("The notebook's R session has closed.");
+    }
     const key = notebook.uri.toString();
     let session = this.sessions.get(key);
     if (!session) {
@@ -301,10 +306,15 @@ export class RNotebookController implements vscode.Disposable {
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
+      // Register queued cells immediately so Stop All can cancel their tokens.
+      const execution = this.controller.createNotebookCellExecution(cell);
       session.pendingTextRender?.cancellation.cancel();
       const task = session.queue.then(async () => {
-        if (!session.stopped && this.sessions.get(key) === session) {
-          await this.executeCell(cell, session);
+        if (session.stopped || this.sessions.get(key) !== session ||
+            execution.token.isCancellationRequested) {
+          execution.end(undefined);
+        } else {
+          await this.executeCell(cell, session, execution);
         }
       });
       session.queue = task.catch(() => undefined);
@@ -402,9 +412,19 @@ export class RNotebookController implements vscode.Disposable {
       return Promise.reject(new Error("The Markdown cell is no longer available."));
     }
     const cells = nativeDocument.cells.map(({ id, marker }) => ({ id, marker }));
-    if (!needsNativeDocumentRender(context.cells) &&
-        !(isQuartoNotebook(notebook.uri.fsPath) &&
-          await hasQuartoProjectConfiguration(notebook.uri.fsPath))) {
+    const needsNative = needsNativeDocumentRender(context.cells);
+    const isQuarto = isQuartoNotebook(notebook.uri.fsPath);
+    // Own the request before any asynchronous work. Shutdown must invalidate
+    // this session, rather than letting a delayed request create its successor.
+    const sessionKey = notebook.uri.toString();
+    const session = needsNative || isQuarto ? this.getSession(notebook) : undefined;
+    const nativeOnly = !needsNative &&
+      !(isQuarto && await hasQuartoProjectConfiguration(notebook.uri.fsPath));
+    if (this.disposed || notebook.isClosed || session?.stopped ||
+        (session && this.sessions.get(sessionKey) !== session)) {
+      throw new TextRenderCancelledError();
+    }
+    if (nativeOnly || !session) {
       return Promise.resolve({
         html: "",
         marker: target.marker,
@@ -426,11 +446,6 @@ export class RNotebookController implements vscode.Disposable {
         cells,
         newDocument: false,
       });
-    }
-    const sessionKey = notebook.uri.toString();
-    let session = this.sessions.get(sessionKey);
-    if (!session) {
-      session = this.getSession(notebook);
     }
     const renderKey = `${sourceHash}:${session.textRevision}`;
     if (session.pendingTextRender?.key === renderKey) {
@@ -595,11 +610,11 @@ export class RNotebookController implements vscode.Disposable {
     await task;
   }
 
-  shutdownSession(notebookUri: vscode.Uri): void {
+  shutdownSession(notebookUri: vscode.Uri): Promise<void> {
     const key = notebookUri.toString();
     const session = this.sessions.get(key);
     if (!session) {
-      return;
+      return Promise.resolve();
     }
     this.sessions.delete(key);
     session.stopped = true;
@@ -608,8 +623,12 @@ export class RNotebookController implements vscode.Disposable {
       session.shutdownTimer = undefined;
     }
     this.attachment.forget(session.process);
-    session.process.dispose();
+    const stopped = session.process.dispose();
+    session.pendingTextRender?.cancellation.cancel();
+    this.stopping.add(stopped);
+    void stopped.then(() => this.stopping.delete(stopped), () => this.stopping.delete(stopped));
     this.sessionShutdown.fire(notebookUri);
+    return stopped;
   }
 
   async restartSession(notebook: vscode.NotebookDocument): Promise<boolean> {
@@ -620,7 +639,7 @@ export class RNotebookController implements vscode.Disposable {
       throw new Error("R notebook execution requires a local file.");
     }
 
-    this.shutdownSession(notebook.uri);
+    await this.shutdownSession(notebook.uri);
     const session = this.getSession(notebook);
     try {
       await this.ensureSessionStarted(
@@ -635,7 +654,7 @@ export class RNotebookController implements vscode.Disposable {
       return restarted;
     } catch (error) {
       if (this.sessions.get(notebook.uri.toString()) === session) {
-        this.shutdownSession(notebook.uri);
+        await this.shutdownSession(notebook.uri);
         throw error;
       }
       return false;
@@ -651,9 +670,9 @@ export class RNotebookController implements vscode.Disposable {
 
   private async executeCell(
     cell: vscode.NotebookCell,
-    session: NotebookSession
+    session: NotebookSession,
+    execution: vscode.NotebookCellExecution
   ): Promise<void> {
-    const execution = this.controller.createNotebookCellExecution(cell);
     execution.executionOrder = ++this.executionOrder;
     execution.start(Date.now());
 
@@ -740,7 +759,8 @@ export class RNotebookController implements vscode.Disposable {
     }
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
+    this.disposed = true;
     for (const session of [...this.sessions.values()]) {
       this.shutdownSession(session.uri);
     }
@@ -749,5 +769,6 @@ export class RNotebookController implements vscode.Disposable {
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
     this.controller.dispose();
+    await Promise.all(this.stopping);
   }
 }

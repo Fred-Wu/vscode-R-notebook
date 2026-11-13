@@ -66,7 +66,11 @@ exports.run = async () => {
         const edit = new vscode.WorkspaceEdit();
         edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), text);
         assert.ok(await vscode.workspace.applyEdit(edit));
-        const position = document.positionAt(offset);
+        // VS Code normalizes inserted line endings to the cell's EOL. Compute
+        // the logical position instead of reusing the pre-normalization offset.
+        const beforeCursor = marked.slice(0, offset).split(/\r\n|\n|\r/);
+        const position = new vscode.Position(beforeCursor.length - 1, beforeCursor.at(-1).length);
+        assert.equal(document.lineAt(position.line).text.slice(0, position.character), beforeCursor.at(-1));
         editor.selection = new vscode.Selection(position, position);
         return position;
       }
@@ -89,7 +93,10 @@ exports.run = async () => {
       await until(async () => (await ui.popup()).includes('date'), `${extension}: manual suggestions on blank header line missing`);
       await replace('---\ntitle: "This is a test"\noutput:\n    word_document:\n        reference_docx: template.docx\n    html_document:\n        @\n---');
       await vscode.commands.executeCommand('editor.action.triggerSuggest');
-      await until(async () => (await ui.popup()).includes('toc'), `${extension}: manual suggestions on blank output option line missing`);
+      await until(() => ui.popup(), `${extension}: manual suggestions on blank output option line missing`);
+      // The list virtualizes rows: toc need not be mounted until it is filtered.
+      await vscode.commands.executeCommand('type', { text: 'to' });
+      await until(async () => (await ui.popup()).includes('toc'), `${extension}: filtered output option missing`);
       // Generic Markdown quick suggestions are disabled in this isolated profile.
       await replace('---\n@\n---');
       await vscode.commands.executeCommand('type', { text: 't' });

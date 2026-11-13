@@ -14,11 +14,13 @@ const browser = process.env.CHROME_PATH || [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ].find(existsSync);
+if (process.env.CI) assert.ok(browser, "CI requires Chrome or Edge for renderer regression tests");
 
 test("renderer applies responses and isolates styles in a browser shadow root", {
   skip: !browser && "Set CHROME_PATH to run the browser renderer regressions",
 }, async (t) => {
   const fixtures = require("./nativeFixtures.cjs").nativeFixtures();
+  if (process.env.CI) assert.equal(fixtures.length, 5, "CI requires all native R Markdown and Quarto fixtures");
   t.diagnostic(fixtures.length ? "Checking native .rmd, .Rmd, .RMD, .qmd and .QMD HTML with identical TOC styling" :
     "Rscript is unavailable; checking synthetic browser fixtures only");
   const bundle = await build({
