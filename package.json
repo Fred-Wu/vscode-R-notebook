@@ -278,7 +278,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.13.3",
     "@types/vscode": "1.85.0",
-    "@types/vscode-notebook-renderer": "^1.72.3",
+    "@types/vscode-notebook-renderer": "^1.72.4",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.28.1",
     "js-yaml": "^4.3.0",
