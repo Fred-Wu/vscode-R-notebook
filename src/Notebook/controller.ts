@@ -13,14 +13,15 @@ import {
   type RNotebookCellMetadata,
   type RNotebookDocumentMetadata,
 } from "./document";
-import { nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
+import { executionMayChangeText, nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
 import { notebookSourceHash } from "./state";
 import {
   RExecutionBridge,
   TextRenderCancelledError,
   type BridgeOutput,
 } from "../Runtime/bridge";
-import { type HiddenRProcess } from "../Runtime/process";
+import { RInterruptError, type HiddenRProcess } from "../Runtime/process";
+import { RStartupCancelledError, waitForRStartup } from "../Runtime/startup";
 import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
@@ -28,6 +29,8 @@ import {
 } from "../Runtime/launch";
 import type { RConsoleTransport } from "../Runtime/console";
 import { isQuartoNotebook } from "../notebookFile";
+import { needsNativeDocumentRender } from "../Renderer/nativeMarkdown";
+import { hasQuartoProjectConfiguration } from "./renderDependencies";
 
 interface NotebookSession {
   uri: vscode.Uri;
@@ -52,6 +55,7 @@ type TextRenderResult = {
   marker: string;
   cells: Array<{ id: string; marker: string }>;
   newDocument: boolean;
+  nativeOnly?: boolean;
 };
 
 function assertRCell(cell: vscode.NotebookCell): void {
@@ -87,7 +91,11 @@ export class RNotebookController implements vscode.Disposable {
   readonly onDidShutdownSession = this.sessionShutdown.event;
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
+  private selection = 0;
   private executionOrder = 0;
+  private disposed = false;
+  private readonly stopping = new Map<string, Promise<void>>();
+  private readonly restarts = new Map<string, symbol>();
 
   constructor(
     private readonly helperPath: string,
@@ -106,6 +114,9 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   private getSession(notebook: vscode.NotebookDocument): NotebookSession {
+    if (this.disposed || notebook.isClosed) {
+      throw new Error("The notebook's R session has closed.");
+    }
     const key = notebook.uri.toString();
     let session = this.sessions.get(key);
     if (!session) {
@@ -138,9 +149,16 @@ export class RNotebookController implements vscode.Disposable {
     if (session.startup) {
       return session.startup;
     }
-    const start = this.sessionIntegrationEnabled
-      ? this.attachment.ensureAttached(session.process, makePreferred)
-      : session.process.start();
+    const startProcess = (): Promise<void> => {
+      if (session.stopped || this.disposed) {
+        throw new Error("The notebook's R session has closed.");
+      }
+      return this.sessionIntegrationEnabled
+        ? this.attachment.ensureAttached(session.process, makePreferred)
+        : session.process.start();
+    };
+    const stopping = this.stopping.get(session.uri.toString());
+    const start = stopping ? stopping.then(startProcess) : startProcess();
     if (session.process.running) {
       return start;
     }
@@ -200,6 +218,8 @@ export class RNotebookController implements vscode.Disposable {
 
   notebookTabClosed(notebookUri: vscode.Uri): void {
     const key = notebookUri.toString();
+    this.restarts.delete(key);
+    if (this.selectedNotebookKey === key) this.selection++;
     this.markdownInputSignatures.delete(key);
     const session = this.sessions.get(key);
     if (!session || session.stopped) {
@@ -275,6 +295,7 @@ export class RNotebookController implements vscode.Disposable {
   async selectNotebook(
     notebook: vscode.NotebookDocument | undefined
   ): Promise<void> {
+    const selection = ++this.selection;
     if (
       notebook?.notebookType !== NOTEBOOK_TYPE ||
       notebook.uri.scheme !== "file" ||
@@ -291,6 +312,7 @@ export class RNotebookController implements vscode.Disposable {
       this.markSessionOpen(existingSession);
     }
     await this.attachment.select(existingSession?.process);
+    if (selection !== this.selection || this.disposed || notebook.isClosed) return;
     await this.startR(notebook, true);
   }
 
@@ -298,10 +320,15 @@ export class RNotebookController implements vscode.Disposable {
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
+      // Register queued cells immediately so Stop All can cancel their tokens.
+      const execution = this.controller.createNotebookCellExecution(cell);
       session.pendingTextRender?.cancellation.cancel();
       const task = session.queue.then(async () => {
-        if (!session.stopped && this.sessions.get(key) === session) {
-          await this.executeCell(cell, session);
+        if (session.stopped || this.sessions.get(key) !== session ||
+            execution.token.isCancellationRequested) {
+          execution.end(undefined);
+        } else {
+          await this.executeCell(cell, session, execution);
         }
       });
       session.queue = task.catch(() => undefined);
@@ -359,11 +386,9 @@ export class RNotebookController implements vscode.Disposable {
       return;
     }
     const updated = { ...notebook.metadata } as RNotebookDocumentMetadata;
-    if (cache) {
-      updated.rNotebookTextCache = cache;
-    } else {
-      delete updated.rNotebookTextCache;
-    }
+    // VS Code merges notebook metadata on the extension host. Omitting a key
+    // leaves its old value visible there; null explicitly invalidates the cache.
+    updated.rNotebookTextCache = cache ?? null;
     const edit = new vscode.WorkspaceEdit();
     edit.set(notebook.uri, [vscode.NotebookEdit.updateNotebookMetadata(updated)]);
     if (!await vscode.workspace.applyEdit(edit)) {
@@ -371,7 +396,7 @@ export class RNotebookController implements vscode.Disposable {
     }
   }
 
-  renderText(
+  async renderText(
     notebook: vscode.NotebookDocument,
     markupId: string
   ): Promise<TextRenderResult> {
@@ -399,6 +424,27 @@ export class RNotebookController implements vscode.Disposable {
       return Promise.reject(new Error("The Markdown cell is no longer available."));
     }
     const cells = nativeDocument.cells.map(({ id, marker }) => ({ id, marker }));
+    const needsNative = needsNativeDocumentRender(context.cells);
+    const isQuarto = isQuartoNotebook(notebook.uri.fsPath);
+    // Own the request before any asynchronous work. Shutdown must invalidate
+    // this session, rather than letting a delayed request create its successor.
+    const sessionKey = notebook.uri.toString();
+    const session = needsNative || isQuarto ? this.getSession(notebook) : undefined;
+    const nativeOnly = !needsNative &&
+      !(isQuarto && await hasQuartoProjectConfiguration(notebook.uri.fsPath));
+    if (this.disposed || notebook.isClosed || session?.stopped ||
+        (session && this.sessions.get(sessionKey) !== session)) {
+      throw new TextRenderCancelledError();
+    }
+    if (nativeOnly || !session) {
+      return Promise.resolve({
+        html: "",
+        marker: target.marker,
+        cells,
+        newDocument: false,
+        nativeOnly: true,
+      });
+    }
     const cachedText = (notebook.metadata as RNotebookDocumentMetadata)
       .rNotebookTextCache;
     if (
@@ -412,11 +458,6 @@ export class RNotebookController implements vscode.Disposable {
         cells,
         newDocument: false,
       });
-    }
-    const sessionKey = notebook.uri.toString();
-    let session = this.sessions.get(sessionKey);
-    if (!session) {
-      session = this.getSession(notebook);
     }
     const renderKey = `${sourceHash}:${session.textRevision}`;
     if (session.pendingTextRender?.key === renderKey) {
@@ -438,10 +479,10 @@ export class RNotebookController implements vscode.Disposable {
       }
       this.attachment.beginExecution(session.process);
       try {
-        await this.ensureSessionStarted(
+        await waitForRStartup(this.ensureSessionStarted(
           session,
           this.selectedNotebookKey === sessionKey
-        );
+        ), cancellation.token);
         const html = await session.bridge.renderText(
           nativeDocument.replacements,
           nativeDocument.source,
@@ -456,6 +497,12 @@ export class RNotebookController implements vscode.Disposable {
           });
         }
         return html;
+      } catch (error) {
+        if (error instanceof RStartupCancelledError) throw new TextRenderCancelledError();
+        if (error instanceof RInterruptError && !session.stopped) {
+          await this.shutdownSession(notebook.uri);
+        }
+        throw error;
       } finally {
         if (!session.stopped) {
           await this.attachment.endExecution(session.process);
@@ -581,11 +628,14 @@ export class RNotebookController implements vscode.Disposable {
     await task;
   }
 
-  shutdownSession(notebookUri: vscode.Uri): void {
+  shutdownSession(notebookUri: vscode.Uri): Promise<void> {
     const key = notebookUri.toString();
+    this.restarts.delete(key);
+    if (this.selectedNotebookKey === key) this.selection++;
+    const previous = this.stopping.get(key);
     const session = this.sessions.get(key);
     if (!session) {
-      return;
+      return previous ?? Promise.resolve();
     }
     this.sessions.delete(key);
     session.stopped = true;
@@ -594,8 +644,26 @@ export class RNotebookController implements vscode.Disposable {
       session.shutdownTimer = undefined;
     }
     this.attachment.forget(session.process);
-    session.process.dispose();
+    const termination = session.process.dispose();
+    // A replacement may still be waiting for its predecessor to stop. Closing
+    // it must continue to await both processes, even if either shutdown fails.
+    const stopped = previous
+      ? Promise.allSettled([previous, termination]).then((results) => {
+          const errors = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []);
+          if (errors.length > 0) {
+            throw new AggregateError(errors, "Could not stop the notebook's R sessions.");
+          }
+        })
+      : termination;
+    session.pendingTextRender?.cancellation.cancel();
+    this.stopping.set(key, stopped);
+    const finished = (): void => {
+      if (this.stopping.get(key) === stopped) this.stopping.delete(key);
+    };
+    void stopped.then(finished, finished);
     this.sessionShutdown.fire(notebookUri);
+    return stopped;
   }
 
   async restartSession(notebook: vscode.NotebookDocument): Promise<boolean> {
@@ -606,27 +674,39 @@ export class RNotebookController implements vscode.Disposable {
       throw new Error("R notebook execution requires a local file.");
     }
 
-    this.shutdownSession(notebook.uri);
-    const session = this.getSession(notebook);
+    const key = notebook.uri.toString();
+    const stopping = this.shutdownSession(notebook.uri);
+    const restart = Symbol();
+    this.restarts.set(key, restart);
+    let session: NotebookSession | undefined;
     try {
+      await stopping;
+      if (this.restarts.get(key) !== restart || this.disposed || notebook.isClosed) {
+        return false;
+      }
+      session = this.getSession(notebook);
       await this.ensureSessionStarted(
         session,
-        this.selectedNotebookKey === notebook.uri.toString()
+        this.selectedNotebookKey === key
       );
+      if (this.restarts.get(key) !== restart || session.stopped) return false;
       await this.updateNativeTextCache(notebook, undefined);
-      const restarted = this.sessions.get(notebook.uri.toString()) === session;
+      const restarted = this.restarts.get(key) === restart && this.sessions.get(key) === session;
       if (restarted) {
         this.markdownStateChanged.fire(notebook);
       }
       return restarted;
     } catch (error) {
-      if (this.sessions.get(notebook.uri.toString()) === session) {
-        this.shutdownSession(notebook.uri);
+      if (this.restarts.get(key) === restart) {
+        if (session && this.sessions.get(key) === session) {
+          await this.shutdownSession(notebook.uri);
+        }
         throw error;
       }
       return false;
     } finally {
-      if (this.selectedNotebookKey !== notebook.uri.toString()) {
+      if (this.restarts.get(key) === restart) this.restarts.delete(key);
+      if (!this.disposed && this.selectedNotebookKey !== key) {
         const selectedSession = this.selectedNotebookKey
           ? this.sessions.get(this.selectedNotebookKey)
           : undefined;
@@ -637,9 +717,9 @@ export class RNotebookController implements vscode.Disposable {
 
   private async executeCell(
     cell: vscode.NotebookCell,
-    session: NotebookSession
+    session: NotebookSession,
+    execution: vscode.NotebookCellExecution
   ): Promise<void> {
-    const execution = this.controller.createNotebookCellExecution(cell);
     execution.executionOrder = ++this.executionOrder;
     execution.start(Date.now());
 
@@ -675,10 +755,10 @@ export class RNotebookController implements vscode.Disposable {
 
       this.attachment.beginExecution(session.process);
       try {
-        await this.ensureSessionStarted(
+        await waitForRStartup(this.ensureSessionStarted(
           session,
           this.selectedNotebookKey === cell.notebook.uri.toString()
-        );
+        ), execution.token);
         const result = await session.bridge.execute(
           chunkSource,
           cell.notebook.uri.fsPath,
@@ -694,9 +774,11 @@ export class RNotebookController implements vscode.Disposable {
         if (session.stopped) {
           return;
         }
-        session.textRevision += 1;
-        await this.updateNativeTextCache(cell.notebook, undefined);
-        this.markdownStateChanged.fire(cell.notebook);
+        if (executionMayChangeText(context.cells)) {
+          session.textRevision += 1;
+          await this.updateNativeTextCache(cell.notebook, undefined);
+          this.markdownStateChanged.fire(cell.notebook);
+        }
         await execution.replaceOutput(result.outputs.map(bridgeOutputToNotebook));
         success = result.success && !execution.token.isCancellationRequested;
       } finally {
@@ -712,7 +794,11 @@ export class RNotebookController implements vscode.Disposable {
         }
       }
     } catch (error) {
-      if (!session.stopped && !execution.token.isCancellationRequested) {
+      if (error instanceof RInterruptError && !session.stopped) {
+        this.output.appendLine(error.message);
+        void vscode.window.showErrorMessage(error.message);
+        await this.shutdownSession(cell.notebook.uri);
+      } else if (!session.stopped && !execution.token.isCancellationRequested) {
         const result = error instanceof Error ? error : new Error(String(error));
         await execution.replaceOutput([
           new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.error(result)]),
@@ -724,7 +810,9 @@ export class RNotebookController implements vscode.Disposable {
     }
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    this.restarts.clear();
     for (const session of [...this.sessions.values()]) {
       this.shutdownSession(session.uri);
     }
@@ -733,5 +821,11 @@ export class RNotebookController implements vscode.Disposable {
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
     this.controller.dispose();
+    const stopped = await Promise.allSettled(this.stopping.values());
+    const errors = stopped.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []);
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Could not stop all notebook R sessions.");
+    }
   }
 }

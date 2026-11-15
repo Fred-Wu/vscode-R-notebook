@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { codeCellSource, parseDocument } from "./document";
@@ -258,8 +258,20 @@ export async function writeNotebookStateFile(
   documentPath: string,
   state: NotebookState
 ): Promise<void> {
-  await fsPromises.writeFile(
-    `${documentPath}.r-notebook`,
-    gzipSync(JSON.stringify(state), { level: 9 })
-  );
+  const content = gzipSync(JSON.stringify(state), { level: 9 });
+  const destination = `${documentPath}.r-notebook`;
+  const temporary = `${destination}.${randomUUID()}.tmp`;
+  const file = await fsPromises.open(temporary, "wx");
+  try {
+    try {
+      await file.writeFile(content);
+    } finally {
+      await file.close();
+    }
+    // A sibling file keeps replacement on the same filesystem. Readers see
+    // either the previous complete state or the new complete state.
+    await fsPromises.rename(temporary, destination);
+  } finally {
+    await fsPromises.rm(temporary, { force: true });
+  }
 }

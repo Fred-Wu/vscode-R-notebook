@@ -1,11 +1,34 @@
 import {
   execFile,
   spawn,
+  type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import type { CancellationToken } from "vscode";
+import { RStartupCancelledError, waitForRStartup } from "./startup";
 
 const execFileAsync = promisify(execFile);
+
+export function terminalExecutable(options: Pick<HiddenRLaunchOptions, "executable" | "env">): string {
+  if (process.platform !== "win32" || !/^R(?:\.exe)?$/i.test(path.basename(options.executable))) {
+    return options.executable;
+  }
+  // Windows R.exe launches Rterm through wrapper processes. Own Rterm directly
+  // so interrupts and shutdown target the interpreter rather than its launcher.
+  const candidates = path.dirname(options.executable) !== "."
+    ? [options.executable]
+    : (options.env.PATH ?? options.env.Path ?? "").split(path.delimiter)
+      .map((directory) => path.join(directory, "R.exe"));
+  const executable = candidates.find(existsSync);
+  if (!executable) return options.executable;
+  const directory = path.dirname(executable);
+  return [path.join(directory, "Rterm.exe"), path.join(directory, "x64", "Rterm.exe")]
+    .find(existsSync) ?? options.executable;
+}
 
 export interface InlineDispatch {
   failure: Promise<never>;
@@ -13,9 +36,11 @@ export interface InlineDispatch {
 }
 
 export interface InlineRTransport {
-  send(command: string): Promise<InlineDispatch>;
+  send(command: string, token?: CancellationToken): Promise<InlineDispatch>;
   interrupt(): Promise<void>;
 }
+
+export class RInterruptError extends Error {}
 
 export interface HiddenRLaunchOptions {
   executable: string;
@@ -27,6 +52,7 @@ export interface HiddenRLaunchOptions {
     command: string;
     attachmentId?: string;
     preparation?: { dispose(): void };
+    // Emit markers at the start of their own lines, after any R prompt/output.
     successMarker: string;
     failureMarker: string;
   };
@@ -45,7 +71,9 @@ async function interruptWindowsRProcess(
         "--no-init-file",
         "-e",
         "if (!requireNamespace('ps', quietly = TRUE)) stop(\"The R package 'ps' is required to cancel notebook execution on Windows.\"); "
-          + `ps::ps_interrupt(ps::ps_handle(${processId}))`,
+          // CTRL+C can be inherited as ignored by a hidden Windows process.
+          // CTRL+BREAK reaches Rterm's interrupt handler in that case too.
+          + `ps::ps_interrupt(ps::ps_handle(${processId}), ctrl_c = FALSE)`,
       ],
       {
         cwd: options.cwd,
@@ -71,8 +99,31 @@ function exitError(code: number | null, signal: NodeJS.Signals | null): Error {
   return new Error("The inline R process stopped before the notebook cell finished.");
 }
 
-function isRunning(child: ChildProcessWithoutNullStreams): boolean {
+function isRunning(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
+}
+
+export async function terminateRProcess(child: ChildProcess): Promise<void> {
+  if (!isRunning(child) || child.pid === undefined) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  if (process.platform === "win32") {
+    // R can be waiting for Pandoc or Quarto. Killing only R leaves those
+    // children and their inherited file handles alive.
+    try {
+      await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true, timeout: 10000,
+      });
+    } catch (error) {
+      if (isRunning(child)) throw error;
+    }
+  } else {
+    // Owned R processes have a process group, including their subprocesses.
+    try { process.kill(-child.pid, "SIGKILL"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  await exited;
 }
 
 export class HiddenRProcess implements InlineRTransport {
@@ -84,6 +135,7 @@ export class HiddenRProcess implements InlineRTransport {
   private rProcessId: number | undefined;
   private ready = false;
   private disposed = false;
+  private stopping?: Promise<void>;
 
   constructor(
     private readonly launchOptions: () => Promise<HiddenRLaunchOptions>,
@@ -130,7 +182,9 @@ export class HiddenRProcess implements InlineRTransport {
       let output = "";
       let settled = false;
       const timeout = setTimeout(() => finish(undefined,
-        new Error("vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent.")), 300000);
+        new Error(initialization.attachmentId
+          ? "vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent."
+          : "Inline R startup timed out; check the R startup profile and R Notebook output.")), 300000);
 
       const stopListening = (): void => {
         clearTimeout(timeout);
@@ -150,39 +204,38 @@ export class HiddenRProcess implements InlineRTransport {
         } else if (processId !== undefined) {
           resolve(processId);
         } else {
-          reject(new Error("vscode-R attachment did not report the R process ID."));
+          reject(new Error("Inline R initialization did not report the R process ID."));
         }
       };
       const onData = (data: Buffer): void => {
-        output = (output + data.toString("utf8")).slice(-16384);
-        const successStart = output.indexOf(initialization.successMarker);
-        if (successStart >= 0) {
-          const processIdStart = successStart + initialization.successMarker.length;
-          const processIdEnd = output.indexOf("\n", processIdStart);
-          if (processIdEnd >= 0) {
+        output += data.toString("utf8");
+        let newline: number;
+        while ((newline = output.indexOf("\n")) >= 0) {
+          const line = output.slice(0, newline).replace(/\r$/, "");
+          output = output.slice(newline + 1);
+          // Interactive R may echo the command containing both markers.
+          // Only complete response lines belong to the attachment protocol.
+          if (line.startsWith(initialization.successMarker)) {
             const processId = Number(
-              output.slice(processIdStart, processIdEnd).trim()
+              line.slice(initialization.successMarker.length).trim()
             );
             if (Number.isSafeInteger(processId) && processId > 0) {
               finish(processId);
             } else {
               finish(
                 undefined,
-                new Error("vscode-R attachment reported an invalid R process ID.")
+                new Error("Inline R initialization reported an invalid R process ID.")
               );
             }
             return;
           }
-        }
-        const failureStart = output.indexOf(initialization.failureMarker);
-        if (failureStart >= 0) {
-          const messageStart = failureStart + initialization.failureMarker.length;
-          const messageEnd = output.indexOf("\n", messageStart);
-          if (messageEnd >= 0) {
-            const message = output.slice(messageStart, messageEnd).trim();
-            finish(undefined, new Error(message || "vscode-R session attachment failed."));
+          if (line.startsWith(initialization.failureMarker)) {
+            const message = line.slice(initialization.failureMarker.length).trim();
+            finish(undefined, new Error(message || "Inline R initialization failed."));
+            return;
           }
         }
+        output = output.slice(-16384);
       };
       const onInputError = (error: Error): void => {
         finish(undefined, new Error(`Could not initialise inline R: ${error.message}`));
@@ -214,19 +267,29 @@ export class HiddenRProcess implements InlineRTransport {
   private async launch(): Promise<ChildProcessWithoutNullStreams> {
     const options = await this.launchOptions();
     if (this.disposed) {
+      options.initialization?.preparation?.dispose();
       throw new Error("The notebook's inline R session has closed.");
     }
+    options.executable = terminalExecutable(options);
 
     this.log(`Starting ${options.executable}`);
-    const child = spawn(options.executable, options.args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false,
-      stdio: "pipe",
-      windowsHide: true,
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(options.executable, options.args, {
+        cwd: options.cwd,
+        env: options.env,
+        shell: false,
+        stdio: "pipe",
+        windowsHide: true,
+        detached: process.platform !== "win32",
+      });
+    } catch (error) {
+      options.initialization?.preparation?.dispose();
+      throw error;
+    }
     this.child = child;
     this.currentLaunchOptions = options;
+    this.currentInitialization = options.initialization;
 
     child.stdout.resume();
     child.stderr.on("data", (data: Buffer) => {
@@ -273,17 +336,34 @@ export class HiddenRProcess implements InlineRTransport {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw exitError(child.exitCode, child.signalCode);
     }
-    if (options.initialization) {
-      this.currentInitialization = options.initialization;
-      try {
-        this.rProcessId = await this.initialize(child, options.initialization);
+    let initialization = options.initialization;
+    if (!initialization) {
+      // Spawning does not mean R has finished its startup profile. Use the same
+      // readiness protocol without viewer attachment so waiting work can cancel.
+      const token = randomUUID();
+      const successMarker = `__R_NOTEBOOK_READY_${token}__:`;
+      initialization = {
+        command: `base::cat("\\n", ${JSON.stringify(successMarker)}, base::Sys.getpid(), "\\n", sep = "")`,
+        successMarker,
+        failureMarker: `__R_NOTEBOOK_ERROR_${token}__:`,
+      };
+    }
+    try {
+      this.rProcessId = await this.initialize(child, initialization);
+      if (options.initialization) {
         this.log("Automatic vscode-R attachment request sent.");
-      } catch (error) {
-        options.initialization.preparation?.dispose();
-        this.clearProcess(child);
-        if (isRunning(child)) child.kill();
-        throw error;
       }
+    } catch (error) {
+      const stopping = this.stopping ??= terminateRProcess(child);
+      this.clearProcess(child);
+      try {
+        await stopping;
+      } finally {
+        // A failed start can be retried, but concurrent disposal must retain
+        // the same termination promise until the process has exited.
+        if (!this.disposed) this.stopping = undefined;
+      }
+      throw error;
     }
     this.ready = true;
     this.runningChanged(true);
@@ -362,8 +442,10 @@ export class HiddenRProcess implements InlineRTransport {
     return processId;
   }
 
-  async send(command: string): Promise<InlineDispatch> {
-    const child = await this.getProcess();
+  async send(command: string, token?: CancellationToken): Promise<InlineDispatch> {
+    if (token?.isCancellationRequested) throw new RStartupCancelledError();
+    const child = await waitForRStartup(this.getProcess(), token);
+    if (token?.isCancellationRequested) throw new RStartupCancelledError();
     if (child.exitCode !== null || child.signalCode !== null) {
       throw exitError(child.exitCode, child.signalCode);
     }
@@ -438,23 +520,25 @@ export class HiddenRProcess implements InlineRTransport {
     if (!options || processId === undefined) {
       return Promise.reject(new Error("Cannot interrupt inline R: its launch context is unavailable."));
     }
-    if (options.interrupt) {
-      this.currentInterruption = options.interrupt(processId);
-    } else if (process.platform === "win32") {
-      this.currentInterruption = interruptWindowsRProcess(options, processId);
-    } else if (child.kill("SIGINT")) {
-      this.currentInterruption = Promise.resolve();
-    } else {
-      this.currentInterruption = Promise.reject(
-        new Error("Could not send SIGINT to the inline R process.")
-      );
-    }
+    this.currentInterruption = Promise.resolve().then(() => {
+      if (options.interrupt) return options.interrupt(processId);
+      if (process.platform === "win32") return interruptWindowsRProcess(options, processId);
+      if (!child.kill("SIGINT")) throw new Error("Could not send SIGINT to the inline R process.");
+    }).catch(async (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      try {
+        await this.dispose();
+      } catch (shutdownError) {
+        throw new RInterruptError(`R interruption failed (${detail}), and its session could not be stopped: ${String(shutdownError)}`);
+      }
+      throw new RInterruptError(`R interruption failed (${detail}). The R session was stopped and its objects were lost. Run a cell to start a new session.`);
+    });
     return this.currentInterruption;
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
     if (this.disposed) {
-      return;
+      return this.stopping ?? Promise.resolve();
     }
     this.disposed = true;
     const child = this.child;
@@ -469,9 +553,10 @@ export class HiddenRProcess implements InlineRTransport {
     if (wasRunning) {
       this.runningChanged(false);
     }
-    if (child && isRunning(child)) {
-      child.stdin.end();
-      child.kill();
-    }
+    this.stopping ??= child ? terminateRProcess(child) : Promise.resolve();
+    // VS Code can call dispose without awaiting it. Keep failures observable
+    // while still returning the promise to explicit shutdown/deactivation.
+    void this.stopping.catch((error: unknown) => this.log(`Could not stop inline R: ${String(error)}`));
+    return this.stopping;
   }
 }

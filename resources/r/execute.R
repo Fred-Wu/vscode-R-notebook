@@ -643,7 +643,7 @@ r_notebook_without_front_matter <- function(markdown, context_marker) {
   markdown
 }
 
-r_notebook_rmarkdown_html_format <- function(document_path) {
+r_notebook_rmarkdown_html_format <- function(document_path, document_outline = FALSE) {
   if (
     !base::requireNamespace("rmarkdown", quietly = TRUE) ||
       !rmarkdown::pandoc_available(error = FALSE)
@@ -651,8 +651,20 @@ r_notebook_rmarkdown_html_format <- function(document_path) {
     base::stop("The R package 'rmarkdown' and Pandoc are required to render R Markdown.")
   }
 
-  configured_output <- rmarkdown::default_output_format(document_path)$name
+  # Resolve YAML options without loading the publishing format (for example Word).
+  # An explicit HTML configuration wins even when it is not the first output.
+  previous_directory <- base::setwd(base::dirname(document_path))
+  base::on.exit(base::setwd(previous_directory), add = TRUE)
+  input_lines <- base::readLines(base::basename(document_path), warn = FALSE, encoding = "UTF-8")
+  resolve_format <- utils::getFromNamespace("output_format_from_yaml_front_matter", "rmarkdown")
+  configured_format <- resolve_format(input_lines)
+  configured_output <- configured_format$name
   uses_bookdown <- base::grepl("^bookdown::", configured_output)
+  html_format <- resolve_format(
+    input_lines,
+    output_format_name = if (uses_bookdown) "bookdown::html_document2" else "html_document"
+  )
+  configured_format$options <- utils::modifyList(configured_format$options, html_format$options)
   if (
     uses_bookdown &&
       !base::requireNamespace("bookdown", quietly = TRUE)
@@ -660,18 +672,23 @@ r_notebook_rmarkdown_html_format <- function(document_path) {
     base::stop("The R package 'bookdown' is required by this R Markdown output format.")
   }
 
+  format_options <- list(
+    self_contained = TRUE,
+    theme = NULL,
+    highlight = NULL,
+    # Match notebook Markdown headings even directly after a paragraph.
+    md_extensions = if (base::isTRUE(document_outline)) "-blank_before_header" else NULL,
+    toc = base::isTRUE(document_outline) && base::isTRUE(configured_format$options$toc),
+    toc_depth = if (base::is.numeric(configured_format$options$toc_depth)) {
+      configured_format$options$toc_depth
+    } else 3L,
+    number_sections = base::isTRUE(document_outline) &&
+      base::isTRUE(configured_format$options$number_sections)
+  )
   format <- if (uses_bookdown) {
-    bookdown::html_document2(
-      self_contained = TRUE,
-      theme = NULL,
-      highlight = NULL
-    )
+    base::do.call(bookdown::html_document2, format_options)
   } else {
-    rmarkdown::html_document(
-      self_contained = TRUE,
-      theme = NULL,
-      highlight = NULL
-    )
+    base::do.call(rmarkdown::html_document, format_options)
   }
 
   format$knitr$opts_chunk$comment <- ""
@@ -703,6 +720,20 @@ r_notebook_rmarkdown_html_format <- function(document_path) {
     base::paste0('id="', label, '"')
   }
   format
+}
+
+r_notebook_quarto_preview_metadata <- function(document_path) {
+  metadata <- rmarkdown::yaml_front_matter(document_path)
+  formats <- metadata$format
+  if (!base::is.list(formats) || base::length(formats) == 0L) return(list())
+  options <- if ("html" %in% base::names(formats)) formats$html else formats[[1L]]
+  if (!base::is.list(options)) return(list())
+  # Publishing-specific options (Word templates, LaTeX includes, etc.) do not
+  # belong to the HTML notebook. Retain portable metadata and outline settings.
+  options[base::intersect(base::names(options), c(
+    "title", "subtitle", "author", "date", "date-format",
+    "toc", "toc-depth", "toc-title", "number-sections", "number-depth"
+  ))]
 }
 
 r_notebook_prepare_html <- function(
@@ -963,15 +994,129 @@ r_notebook_render_rmarkdown_html <- function(
   ), collapse = "\n")
 }
 
+r_notebook_mask_literal_markdown <- function(
+  markup,
+  token_prefix = "VSC_R_NOTEBOOK_FENCED_LINE_"
+) {
+  # knitr's inline parser is deliberately independent of Pandoc. Mask complete
+  # literal fenced code blocks so examples of `r expressions` are not run.
+  masked <- markup
+  originals <- list()
+  active_marker <- ""
+  active_length <- 0L
+  # Containers are ordered: list indentation and quote prefixes can alternate.
+  # A zero denotes a quote; positive widths denote list-item indentation.
+  containers <- integer()
+  paragraph_open <- FALSE
+  if (base::length(markup) > 0L) for (index in base::seq_along(markup)) {
+    line <- markup[[index]]
+    # Measure container indentation in columns while preserving original text.
+    tab <- base::regexpr("\t", line, fixed = TRUE)[[1L]]
+    while (tab > 0L) {
+      line <- base::paste0(base::substr(line, 1L, tab - 1L),
+        base::strrep(" ", 4L - (tab - 1L) %% 4L), base::substring(line, tab + 1L))
+      tab <- base::regexpr("\t", line, fixed = TRUE)[[1L]]
+    }
+    matched <- 0L
+    for (container in containers) {
+      if (container == 0L) {
+        if (!base::grepl("^ {0,3}>[ \t]?", line, perl = TRUE)) break
+        line <- base::sub("^ {0,3}>[ \t]?", "", line, perl = TRUE)
+      } else if (!base::nzchar(base::trimws(line))) {
+        line <- ""
+      } else {
+        if (!base::startsWith(line, base::strrep(" ", container))) break
+        line <- base::substring(line, container + 1L)
+      }
+      matched <- matched + 1L
+    }
+    if (matched < base::length(containers)) {
+      containers <- containers[base::seq_len(matched)]
+      active_marker <- ""
+      paragraph_open <- FALSE
+    }
+    if (!base::nzchar(active_marker)) repeat {
+      quote <- base::regmatches(line, base::regexpr("^ {0,3}>[ \t]?", line, perl = TRUE))
+      if (base::length(quote) && base::nzchar(quote)) {
+        containers <- c(containers, 0L)
+        line <- base::substring(line, base::nchar(quote) + 1L)
+      } else {
+        prefix <- base::regmatches(line, base::regexpr(
+          "^ {0,3}(?:[-+*]|[0-9]+[.)]) +", line, perl = TRUE
+        ))
+        if (!base::length(prefix) || !base::nzchar(prefix)) break
+        padding <- base::attr(base::regexpr(" +$", prefix), "match.length")
+        # Five or more spaces after a marker start indented code within the item.
+        width <- base::nchar(prefix) - if (padding > 4L) padding - 1L else 0L
+        containers <- c(containers, width)
+        line <- base::substring(line, width + 1L)
+      }
+      paragraph_open <- FALSE
+    }
+    opening <- base::regmatches(
+      line, base::regexec("^ {0,3}(`{3,}|~{3,})", line, perl = TRUE)
+    )[[1L]]
+    is_fence <- FALSE
+    if (base::nzchar(active_marker)) {
+      is_fence <- TRUE
+      closing <- base::paste0(
+        "^ {0,3}", active_marker,
+        "{", active_length, ",}[ \t]*$"
+      )
+      if (base::grepl(closing, line, perl = TRUE)) {
+        active_marker <- ""
+      }
+    } else if (base::length(opening) >= 2L) {
+      active_marker <- base::substr(opening[[2L]], 1L, 1L)
+      active_length <- base::nchar(opening[[2L]])
+      is_fence <- TRUE
+    } else if (!paragraph_open && base::grepl("^(?: {4}|\\t)", line, perl = TRUE)) {
+      # An indented block cannot interrupt an existing paragraph.
+      is_fence <- TRUE
+    }
+    paragraph_open <- !is_fence && base::nzchar(base::trimws(line)) &&
+      !base::grepl("^ {0,3}(?:#{1,6}[ \t]|[-*_]{3,}[ \t]*$)", line, perl = TRUE)
+    if (!is_fence) next
+    token <- base::paste0(token_prefix, index, "_")
+    while (base::any(base::grepl(token, markup, fixed = TRUE))) {
+      token <- base::paste0(token, "X")
+    }
+    masked[[index]] <- token
+    originals[[token]] <- markup[[index]]
+  }
+
+  list(markup = masked, originals = originals)
+}
+
+r_notebook_restore_literal_markdown <- function(result, originals) {
+  for (token in base::names(originals)) {
+    position <- base::regexpr(token, result, fixed = TRUE)[[1L]]
+    if (position > 0L) {
+      result <- base::paste0(
+        base::substr(result, 1L, position - 1L),
+        originals[[token]],
+        base::substr(
+          result,
+          position + base::nchar(token),
+          base::nchar(result)
+        )
+      )
+    }
+  }
+  result
+}
+
 r_notebook_inline_markdown <- function(markup, evaluation_env) {
+  protected <- r_notebook_mask_literal_markdown(markup)
   parsed <- utils::getFromNamespace("parse_inline", "knitr")(
-    markup,
+    protected$markup,
     utils::getFromNamespace("all_patterns", "knitr")$md
   )
-  utils::getFromNamespace("inline_exec", "knitr")(
+  result <- utils::getFromNamespace("inline_exec", "knitr")(
     parsed,
     envir = evaluation_env
   )
+  r_notebook_restore_literal_markdown(result, protected$originals)
 }
 
 r_notebook_finish_request <- function(output_dir, success, request_name) {
@@ -984,6 +1129,33 @@ r_notebook_finish_request <- function(output_dir, success, request_name) {
   if (!base::file.rename(temporary, base::file.path(output_dir, "done"))) {
     base::stop(base::paste("Could not finish the", request_name, "request"))
   }
+}
+
+r_notebook_toc_filter <- function(output_dir) {
+  path <- base::file.path(output_dir, "notebook-toc.lua")
+  # Pandoc omits headings inside a Div whose first block is not a heading.
+  # Build the TOC from a copy without our cell wrappers, keeping the rendered
+  # body and its cell boundaries intact. Pandoc still owns IDs, depth and labels.
+  base::writeLines(r"(
+function Pandoc(doc)
+  if not PANDOC_WRITER_OPTIONS.table_of_contents then return nil end
+  local outline = doc:walk {
+    Div = function(div)
+      if div.classes:includes('r-notebook-markdown-cell') then
+        return div.content
+      end
+    end
+  }
+  local options = {}
+  for key, value in pairs(PANDOC_WRITER_OPTIONS) do options[key] = value end
+  options.template = pandoc.template.compile('$toc$')
+  local toc = pandoc.MetaBlocks({pandoc.RawBlock('html', pandoc.write(outline, 'html', options))})
+  doc.meta.toc = toc
+  doc.meta['table-of-contents'] = toc
+  return doc
+end
+)", path, useBytes = TRUE)
+  path
 }
 
 r_notebook_render_text <- function(
@@ -1028,6 +1200,7 @@ r_notebook_render_text <- function(
       warn = FALSE,
       encoding = "UTF-8"
     ), collapse = "\n")
+    literal_lines <- list()
     for (cell in cells) {
       rendered <- if (base::identical(extension, "qmd")) {
         r_notebook_inline_markdown(
@@ -1035,7 +1208,14 @@ r_notebook_render_text <- function(
           evaluation_env
         )
       } else {
-        cell$source
+        # Keep knitr's normal R Markdown evaluation (including YAML/params),
+        # but never expose literal examples to its inline or chunk parser.
+        protected <- r_notebook_mask_literal_markdown(
+          base::strsplit(cell$source, "\n", fixed = TRUE)[[1L]],
+          token_prefix = base::paste0(cell$token, "_LITERAL_")
+        )
+        literal_lines <- c(literal_lines, protected$originals)
+        base::paste(protected$markup, collapse = "\n")
       }
       parts <- base::strsplit(document, cell$token, fixed = TRUE)[[1L]]
       if (base::length(parts) != 2L) {
@@ -1044,6 +1224,7 @@ r_notebook_render_text <- function(
       document <- base::paste0(parts[[1L]], rendered, parts[[2L]])
     }
     base::writeLines(document, native_document_path, useBytes = TRUE)
+    toc_filter <- r_notebook_toc_filter(output_dir)
 
     if (base::identical(extension, "qmd")) {
       quarto <- r_notebook_quarto_executable(quarto_executable)
@@ -1051,19 +1232,32 @@ r_notebook_render_text <- function(
       quarto_html_path <- base::file.path(output_dir, "quarto-text.html")
       quarto_error_path <- base::file.path(output_dir, "quarto-text-error.txt")
       base::on.exit(base::unlink(c(quarto_html_path, quarto_error_path)), add = TRUE)
+      preview_metadata <- r_notebook_quarto_preview_metadata(native_document_path)
+      preview_arguments <- base::character()
+      if (base::length(preview_metadata) > 0L) {
+        preview_path <- base::file.path(output_dir, "quarto-preview.yml")
+        base::writeLines(jsonlite::toJSON(preview_metadata, auto_unbox = TRUE), preview_path)
+        preview_arguments <- c("--metadata-file", base::shQuote(preview_path))
+      }
       render_status <- base::suppressWarnings(base::system2(
         quarto,
         c(
           "render",
           base::shQuote(base::basename(native_document_path)),
           "--to", "html",
+          # Inline R has already been evaluated above. Literal R chunk examples
+          # must not make Quarto select knitr and evaluate the document again.
+          "--metadata", "engine:markdown",
+          "--metadata", "from:markdown-blank_before_header",
           "--no-execute",
           "--quiet",
           "--output", "-",
           "--metadata", "embed-resources:true",
           "--metadata", "theme:none",
           "--metadata", "highlight-style:none",
-          "--metadata", "html-math-method:mathml"
+          "--metadata", "html-math-method:mathml",
+          "--lua-filter", base::shQuote(toc_filter),
+          preview_arguments
         ),
         stdout = quarto_html_path,
         stderr = quarto_error_path
@@ -1088,9 +1282,26 @@ r_notebook_render_text <- function(
         encoding = "UTF-8"
       ), collapse = "\n")
     } else {
+      html_format <- r_notebook_rmarkdown_html_format(native_document_path, document_outline = TRUE)
+      html_format$pandoc$args <- c(html_format$pandoc$args, "--lua-filter", toc_filter)
+      if (base::length(literal_lines) > 0L) {
+        native_pre_processor <- html_format$pre_processor
+        html_format$pre_processor <- function(metadata, input_file, ...) {
+          # This receives the knitted Markdown, immediately before Pandoc. Restore
+          # examples here so they are rendered verbatim and cannot be evaluated.
+          knitted <- base::paste(base::readLines(
+            input_file, warn = FALSE, encoding = "UTF-8"
+          ), collapse = "\n")
+          base::writeLines(
+            r_notebook_restore_literal_markdown(knitted, literal_lines),
+            input_file, useBytes = TRUE
+          )
+          native_pre_processor(metadata, input_file, ...)
+        }
+      }
       rendered_path <- rmarkdown::render(
         input = native_document_path,
-        output_format = r_notebook_rmarkdown_html_format(native_document_path),
+        output_format = html_format,
         output_file = "result.html",
         output_dir = output_dir,
         intermediates_dir = output_dir,

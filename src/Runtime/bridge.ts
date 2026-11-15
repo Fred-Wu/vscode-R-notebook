@@ -6,6 +6,7 @@ import * as path from "node:path";
 import type * as vscode from "vscode";
 import { normalizeNotebookExtension } from "../notebookFile";
 import type { InlineDispatch, InlineRTransport } from "./process";
+import { RStartupCancelledError } from "./startup";
 
 export interface BridgeOutput {
   kind: "display" | "error";
@@ -40,6 +41,29 @@ function rString(value: string): string {
     .replace(/"/g, '\\"')
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")}"`;
+}
+
+/** Install completion cleanup before acknowledging that R can be interrupted. */
+function interruptibleRequest(requestDirectory: string, body: readonly string[]): string {
+  return [
+    "base::suspendInterrupts(base::local({",
+    "  base::on.exit({",
+    `    if (!base::file.exists(${rString(path.join(requestDirectory, "done"))})) {`,
+    `      base::writeLines('false', ${rString(path.join(requestDirectory, ".done"))})`,
+    `      base::file.rename(${rString(path.join(requestDirectory, ".done"))}, ${rString(path.join(requestDirectory, "done"))})`,
+    "    }",
+    // The helper's `done` file carries the result. Only this outer handler can
+    // acknowledge that all helper on.exit handlers have finished using files.
+    `    base::writeLines('finished', ${rString(path.join(requestDirectory, ".finished"))})`,
+    `    base::file.rename(${rString(path.join(requestDirectory, ".finished"))}, ${rString(path.join(requestDirectory, "finished"))})`,
+    "  }, add = TRUE)",
+    `  base::writeLines('ready', ${rString(path.join(requestDirectory, "ready"))})`,
+    "  base::allowInterrupts({",
+    ...body,
+    "  })",
+    "}))",
+    "",
+  ].join("\n");
 }
 
 function parseMetadata(content: string): OutputMetadata {
@@ -120,7 +144,7 @@ async function readTextResult(requestDirectory: string): Promise<string> {
   return fsPromises.readFile(path.join(requestDirectory, "result.html"), "utf8");
 }
 
-function waitForDone(requestDirectory: string): { promise: Promise<void>; watcher: fs.FSWatcher } {
+function waitForDone(requestDirectory: string, filename = "done"): { promise: Promise<void>; watcher: fs.FSWatcher } {
   let resolveDone: (() => void) | undefined;
   let rejectDone: ((error: Error) => void) | undefined;
   let settled = false;
@@ -132,7 +156,7 @@ function waitForDone(requestDirectory: string): { promise: Promise<void>; watche
     if (settled) {
       return;
     }
-    fsPromises.access(path.join(requestDirectory, "done"), fs.constants.F_OK).then(
+    fsPromises.access(path.join(requestDirectory, filename), fs.constants.F_OK).then(
       () => {
         settled = true;
         resolveDone?.();
@@ -140,8 +164,8 @@ function waitForDone(requestDirectory: string): { promise: Promise<void>; watche
       () => undefined
     );
   };
-  const watcher = fs.watch(requestDirectory, (event, filename) => {
-    if (event === "rename" && filename?.toString() === "done") {
+  const watcher = fs.watch(requestDirectory, (event, changedName) => {
+    if (event === "rename" && changedName?.toString() === filename) {
       check();
     }
   });
@@ -246,6 +270,7 @@ export class RExecutionBridge {
     const requestPath = path.join(requestDirectory, "request.R");
     let nativeDocumentPath = documentPath;
     let completion: ReturnType<typeof waitForDone> | undefined;
+    let ready: ReturnType<typeof waitForDone> | undefined;
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
@@ -281,8 +306,7 @@ export class RExecutionBridge {
       const quartoExecutable = this.configuredQuartoExecutable?.() ?? "";
       await fsPromises.writeFile(
         requestPath,
-        [
-          "local({",
+        interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
           "  bridge$r_notebook_execute(",
@@ -297,24 +321,32 @@ export class RExecutionBridge {
           "    evaluation_env = .GlobalEnv,",
           `    quarto_executable = ${rString(quartoExecutable)}`,
           "  )",
-          "})",
-          "",
-        ].join("\n"),
+        ]),
         "utf8"
       );
-      completion = waitForDone(requestDirectory);
+      completion = waitForDone(requestDirectory, "finished");
+      ready = waitForDone(requestDirectory, "ready");
       if (token.isCancellationRequested) {
         return { success: false, outputs: [] };
       }
       dispatch = await this.transport.send(
-        `base::source(${rString(requestPath)}, echo = FALSE)`
+        `base::source(${rString(requestPath)}, echo = FALSE)`, token
       );
+      // Sending bytes does not mean R has accepted this request. In particular,
+      // helper loading must be interruptible only after completion is guaranteed.
+      const interruptible = Promise.race([
+        ready.promise.then(() => true),
+        completion.promise.then(() => false),
+        dispatch.failure,
+      ]);
+      void interruptible.catch(() => undefined);
       const interrupt = (): void => {
         if (cancelled) {
           return;
         }
         cancelled = true;
-        interruptCompletion = this.transport.interrupt();
+        interruptCompletion = interruptible.then((started) =>
+          started ? this.transport.interrupt() : undefined);
         void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token.onCancellationRequested(interrupt);
@@ -327,10 +359,17 @@ export class RExecutionBridge {
         return { success: false, outputs: [] };
       }
       return await readResult(requestDirectory);
+    } catch (error) {
+      if (error instanceof RStartupCancelledError) return { success: false, outputs: [] };
+      // A failed interrupt stops R. Await that shutdown even if its process-exit
+      // notification wins the race, and preserve the actionable interrupt error.
+      if (cancelled) await interruptCompletion;
+      throw error;
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
       completion?.watcher.close();
+      ready?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -347,6 +386,7 @@ export class RExecutionBridge {
     const cellsPath = path.join(requestDirectory, "cells.json");
     const requestPath = path.join(requestDirectory, "request.R");
     let completion: ReturnType<typeof waitForDone> | undefined;
+    let ready: ReturnType<typeof waitForDone> | undefined;
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
@@ -366,8 +406,7 @@ export class RExecutionBridge {
       await fsPromises.writeFile(cellsPath, JSON.stringify(cells), "utf8");
       await fsPromises.writeFile(
         requestPath,
-        [
-          "local({",
+        interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
           "  bridge$r_notebook_render_text(",
@@ -378,24 +417,30 @@ export class RExecutionBridge {
           "    evaluation_env = .GlobalEnv,",
           `    quarto_executable = ${rString(quartoExecutable)}`,
           "  )",
-          "})",
-          "",
-        ].join("\n"),
+        ]),
         "utf8"
       );
-      completion = waitForDone(requestDirectory);
+      completion = waitForDone(requestDirectory, "finished");
+      ready = waitForDone(requestDirectory, "ready");
       if (token?.isCancellationRequested) {
         throw new TextRenderCancelledError();
       }
       dispatch = await this.transport.send(
-        `base::source(${rString(requestPath)}, echo = FALSE)`
+        `base::source(${rString(requestPath)}, echo = FALSE)`, token
       );
+      const interruptible = Promise.race([
+        ready.promise.then(() => true),
+        completion.promise.then(() => false),
+        dispatch.failure,
+      ]);
+      void interruptible.catch(() => undefined);
       const interrupt = (): void => {
         if (cancelled) {
           return;
         }
         cancelled = true;
-        interruptCompletion = this.transport.interrupt();
+        interruptCompletion = interruptible.then((started) =>
+          started ? this.transport.interrupt() : undefined);
         void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token?.onCancellationRequested(interrupt);
@@ -408,10 +453,15 @@ export class RExecutionBridge {
         throw new TextRenderCancelledError();
       }
       return await readTextResult(requestDirectory);
+    } catch (error) {
+      if (error instanceof RStartupCancelledError) throw new TextRenderCancelledError();
+      if (cancelled) await interruptCompletion;
+      throw error;
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
       completion?.watcher.close();
+      ready?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }

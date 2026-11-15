@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as fsPromises from "node:fs/promises";
+import fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -164,3 +165,37 @@ test("uses Quarto pipe labels to match edited code cells", () => {
   const source = "```{r}\n#| label: fitted-model\nlm(y ~ x)\n```\n";
   assert.equal(storedCells(source)[0]?.label, "fitted-model");
 });
+
+for (const failure of ["write", "rename"] as const) {
+  test(`a failed sidecar ${failure} preserves the previous state and removes temporary files`, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-state-test-"));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    const document = path.join(directory, "report.qmd");
+    const previous: NotebookState = {
+      version: 1, sourceHash: notebookSourceHash("previous"), cells: [], cellOutputs: [],
+    };
+    const next = { ...previous, sourceHash: notebookSourceHash("next") };
+    await writeNotebookStateFile(document, previous);
+    if (failure === "write") {
+      const open = fs.open;
+      t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const file = await open(...args);
+        const write = file.writeFile.bind(file);
+        t.mock.method(file, "writeFile", async () => {
+          await write(Buffer.from("partial"));
+          throw new Error("Injected write failure");
+        });
+        return file;
+      });
+    } else {
+      t.mock.method(fs, "rename", async () => { throw new Error("Injected rename failure"); });
+    }
+    await assert.rejects(writeNotebookStateFile(document, next), /Injected/);
+    assert.deepEqual(await readNotebookStateFile(document), previous);
+    assert.deepEqual(await fs.readdir(directory), ["report.qmd.r-notebook"]);
+    t.mock.restoreAll();
+    await writeNotebookStateFile(document, next);
+    assert.deepEqual(await readNotebookStateFile(document), next);
+    assert.deepEqual(await fs.readdir(directory), ["report.qmd.r-notebook"]);
+  });
+}

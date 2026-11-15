@@ -24,6 +24,6 @@ export function yamlFrontMatterHtml(source: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return source
-    ? `<pre data-r-notebook-front-matter><code class="language-yaml">${escaped}</code></pre>`
+    ? `<details data-r-notebook-front-matter><summary>YAML front matter</summary><pre><code class="language-yaml">${escaped}</code></pre></details>`
     : "";
 }

@@ -56,6 +56,10 @@ function storedOutputs(
 }
 
 export class RNotebookSerializer implements vscode.NotebookSerializer {
+  private readonly restoring = new WeakMap<
+    vscode.NotebookDocument, Promise<NotebookState | undefined>
+  >();
+
   deserializeNotebook(content: Uint8Array): vscode.NotebookData {
     const parsed = parseDocument(new TextDecoder().decode(content));
     const cells = parsed.cells.map((cell) => {
@@ -85,14 +89,20 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
   async prepareNotebook(
     notebook: vscode.NotebookDocument,
     restoreSidecar: boolean,
-    retainedState?: NotebookState
+    retainedState?: NotebookState | Promise<NotebookState>,
+    ready: Promise<unknown> = Promise.resolve()
   ): Promise<void> {
     if (notebook.notebookType !== NOTEBOOK_TYPE) {
       return;
     }
-    const state = retainedState ?? (restoreSidecar && notebook.uri.scheme === "file"
-      ? await readNotebookStateFile(notebook.uri.fsPath)
-      : undefined);
+    // Register restoration before awaiting prior saves/preparations. A close
+    // can capture state at any point, including before the sidecar read starts.
+    const restoration = retainedState || (restoreSidecar && notebook.uri.scheme === "file")
+      ? ready.then(() => retainedState ?? readNotebookStateFile(notebook.uri.fsPath))
+      : undefined;
+    if (restoration) this.restoring.set(notebook, restoration);
+    const state = await (restoration ?? ready.then(() => undefined));
+    if (notebook.isClosed) return;
     const restored = state
       ? reconcileNotebookState(notebookSource(notebook), state)
       : undefined;
@@ -149,6 +159,7 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
     }
 
     if (edits.length === 0) {
+      if (this.restoring.get(notebook) === restoration) this.restoring.delete(notebook);
       return;
     }
     const edit = new vscode.WorkspaceEdit();
@@ -156,6 +167,7 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
     if (!await vscode.workspace.applyEdit(edit)) {
       throw new Error("VS Code could not prepare the R notebook state.");
     }
+    if (this.restoring.get(notebook) === restoration) this.restoring.delete(notebook);
   }
 
   serializeNotebook(data: vscode.NotebookData): Uint8Array {
@@ -174,7 +186,9 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
     return new TextEncoder().encode(source);
   }
 
-  captureState(notebook: vscode.NotebookDocument): NotebookStateSnapshot {
+  captureState(notebook: vscode.NotebookDocument): Promise<NotebookStateSnapshot> {
+    // Capture live cells synchronously: a closed document may disappear while
+    // its sidecar is still loading. Local outputs always win over restored ones.
     const source = notebookSource(notebook);
     const sourceHash = notebookSourceHash(source);
     const stateCells = storedCells(source);
@@ -212,7 +226,7 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
         executionSummary: cell.executionSummary,
       });
     }
-    return {
+    const snapshot: NotebookStateSnapshot = {
       uri: notebook.uri,
       state: {
         version: 1,
@@ -221,9 +235,22 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
         cellOutputs,
       },
     };
+    const captured = (this.restoring.get(notebook) ?? Promise.resolve(undefined))
+      .then((state) => {
+        if (state) {
+          const localCells = new Set(cellOutputs.map((output) => output.cell));
+          const restored = reconcileNotebookState(source, state);
+          cellOutputs.push(...restored.cellOutputs.filter((output) => !localCells.has(output.cell)));
+        }
+        return snapshot;
+      });
+    // Saves are queued; a failed restoration may reject before its save runs.
+    void captured.catch(() => undefined);
+    return captured;
   }
 
-  async saveState(snapshot: NotebookStateSnapshot): Promise<void> {
+  async saveState(pending: NotebookStateSnapshot | Promise<NotebookStateSnapshot>): Promise<void> {
+    const snapshot = await pending;
     await writeNotebookStateFile(
       snapshot.uri.fsPath,
       snapshot.state

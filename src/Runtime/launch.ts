@@ -121,9 +121,9 @@ async function launchOptions(
         "  tryCatch({",
         `    connected <- isTRUE((${preparation.command})$value)`,
         '    if (!connected) stop("vscode-R sess did not connect.")',
-        `    cat(${JSON.stringify(successMarker)}, Sys.getpid(), "\\n", sep = "")`,
+        `    cat("\\n", ${JSON.stringify(successMarker)}, Sys.getpid(), "\\n", sep = "")`,
         "  }, error = function(error) {",
-        `    cat(${JSON.stringify(failureMarker)}, gsub("[[:cntrl:]]+", " ", conditionMessage(error)), "\\n", sep = "")`,
+        `    cat("\\n", ${JSON.stringify(failureMarker)}, gsub("[[:cntrl:]]+", " ", conditionMessage(error)), "\\n", sep = "")`,
         "  })",
         "})",
       ].join("\n"),
@@ -131,14 +131,19 @@ async function launchOptions(
     output.appendLine(`[${path.basename(notebookUri.fsPath)}] Preparing vscode-R managed sess attachment ${token}.`);
   }
 
-  const api = (rExtension.isActive ? rExtension.exports : await rExtension.activate()) as {
-    getRExecutablePath?: (resource?: vscode.Uri) => Promise<string | undefined>;
-  };
-  // vscode-R's public resolver understands r.executablePath, the deprecated
-  // r.rpath.* entries, variable substitution and R discovery.
-  const publicRPath = await api.getRExecutablePath?.(notebookUri);
+  let executable: string;
+  try {
+    const api = (rExtension.isActive ? rExtension.exports : await rExtension.activate()) as {
+      getRExecutablePath?: (resource?: vscode.Uri) => Promise<string | undefined>;
+    };
+    // Resolve through vscode-R, which also handles R discovery and variables.
+    executable = await api.getRExecutablePath?.(notebookUri) || resolveRExecutable(notebookUri);
+  } catch (error) {
+    initialization?.preparation?.dispose();
+    throw error;
+  }
   return {
-    executable: publicRPath || resolveRExecutable(notebookUri),
+    executable,
     args: [
       "--quiet",
       "--no-save",
