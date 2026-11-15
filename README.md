@@ -13,7 +13,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Display YAML title, author, and date metadata, plus a clickable table of contents when enabled.
 - Edit cell labels and options from the cell toolbar.
 - Show suggestions based on installed R and Quarto tools and notebook content.
-- Send code cells to [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
+- Send code cells to [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) when the optional extension is installed.
 - Save and restore outputs with an optional `.r-notebook` sidecar file.
 - Connect the active session to [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r) viewers.
 
@@ -34,7 +34,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 
 - Install `bookdown` when an R Markdown document uses a `bookdown::` output format.
 - Install [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r).
-- Install [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console).
+- Optional: install [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) to use **Run Cell in R Console**. Inline execution, rendering, and notebook sessions work without it.
 - Configure R through vscode-R's `r.executablePath` setting, or make R available through `R_HOME` or `PATH`.
 - Install the Quarto CLI for `.qmd` notebooks.
 - Set `r.notebook.quartoPath` if Quarto is not on the R session's `PATH`.
@@ -47,7 +47,7 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Use **Reopen Editor With...** and choose **R Notebook Editor** when needed.
 - Save normally to write changes back to the original `.rmd` or `.qmd` file.
 - Use the notebook run buttons to run one or more cells.
-- Use **Run Cell in R Console** to send a cell to the interactive R Console.
+- With the optional R Console extension installed, use **Run Cell in R Console** to send a cell to the interactive R Console.
 - Select the gear button on a code cell to edit its label and options.
 - Use **Merge to header** or **Merge to pipe** to combine R Markdown options.
 - Treat `#|` pipe values as the winner when R Markdown options conflict.
@@ -100,7 +100,8 @@ To inspect an object, run its defining cell in the notebook, then use
 a top-level object in the R Workspace Viewer. Data frames and lists use
 vscode-R's viewers. Viewer requests wait for any running notebook execution.
 
-**Run Cell in R Console** uses a separate interactive R Console session. It has
+**Run Cell in R Console** requires the optional R Console extension and uses a
+separate interactive R Console session. It has
 its own objects and can become the session shown by vscode-R. Select the notebook
 again to return the viewers to its inline session. **Restart R** and **Shutdown
 and Close** operate on the notebook's inline session; closing its tab normally
@@ -133,7 +134,7 @@ If integration does not start:
 ## Dependencies
 
 - [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r) — Provides the R path and optional viewer integration.
-- [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) — Provides interactive console execution.
+- [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) (optional) — Enables **Run Cell in R Console**. The notebook runs its own native R process independently.
 - `knitr` 1.44 or newer and `rmarkdown` — Support execution and Markdown-cell display.
 - Quarto CLI — Supports `.qmd` notebooks.
 - `ps` on Windows — Interrupts a cell without stopping its session.

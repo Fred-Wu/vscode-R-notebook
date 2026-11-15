@@ -52,8 +52,7 @@
     }
   },
   "extensionDependencies": [
-    "REditorSupport.r",
-    "RConsole.vsc-r-console"
+    "REditorSupport.r"
   ],
   "contributes": {
     "languages": [{
