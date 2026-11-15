@@ -274,6 +274,9 @@
     "package:pre-release": "vsce package --pre-release",
     "package": "npm run package:vsix"
   },
+  "overrides": {
+    "minimatch@>=7": "^11.0.5"
+  },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.13.3",
