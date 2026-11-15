@@ -6,6 +6,7 @@ import * as path from "node:path";
 import type * as vscode from "vscode";
 import { normalizeNotebookExtension } from "../notebookFile";
 import type { InlineDispatch, InlineRTransport } from "./process";
+import { RStartupCancelledError } from "./startup";
 
 export interface BridgeOutput {
   kind: "display" | "error";
@@ -329,7 +330,7 @@ export class RExecutionBridge {
         return { success: false, outputs: [] };
       }
       dispatch = await this.transport.send(
-        `base::source(${rString(requestPath)}, echo = FALSE)`
+        `base::source(${rString(requestPath)}, echo = FALSE)`, token
       );
       // Sending bytes does not mean R has accepted this request. In particular,
       // helper loading must be interruptible only after completion is guaranteed.
@@ -359,6 +360,7 @@ export class RExecutionBridge {
       }
       return await readResult(requestDirectory);
     } catch (error) {
+      if (error instanceof RStartupCancelledError) return { success: false, outputs: [] };
       // A failed interrupt stops R. Await that shutdown even if its process-exit
       // notification wins the race, and preserve the actionable interrupt error.
       if (cancelled) await interruptCompletion;
@@ -424,7 +426,7 @@ export class RExecutionBridge {
         throw new TextRenderCancelledError();
       }
       dispatch = await this.transport.send(
-        `base::source(${rString(requestPath)}, echo = FALSE)`
+        `base::source(${rString(requestPath)}, echo = FALSE)`, token
       );
       const interruptible = Promise.race([
         ready.promise.then(() => true),
@@ -452,6 +454,7 @@ export class RExecutionBridge {
       }
       return await readTextResult(requestDirectory);
     } catch (error) {
+      if (error instanceof RStartupCancelledError) throw new TextRenderCancelledError();
       if (cancelled) await interruptCompletion;
       throw error;
     } finally {

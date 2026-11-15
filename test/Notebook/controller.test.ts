@@ -34,6 +34,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   let executeBridge = async (_source: string, _token: vscode.CancellationToken) => {};
   let configuration = async () => true;
   let selectAttachment = async () => {};
+  let startProcess = async () => {};
   const metadataUpdates: unknown[] = [];
   let textRenders = 0;
   let renderFailure: Error | undefined;
@@ -107,7 +108,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
       createInlineRProcess: () => {
         const process = {
           running: false, starts: 0,
-          async start() { this.running = true; this.starts++; },
+          async start() { this.starts++; await startProcess(); this.running = true; },
           async dispose() { this.running = false; },
         };
         processes.push(process);
@@ -327,6 +328,46 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
       assert.equal(dispatched.length, 2);
     } finally { c.dispose(); }
   });
+
+  for (const operation of ["code cell", "native text"] as const) {
+    await t.test(`${operation} cancellation releases the queue during shared startup`, { timeout: 3000 }, async () => {
+      const c = controller();
+      const document = notebook(operation === "code cell" ? "code" : "markup");
+      const starting = deferred<void>();
+      const ready = deferred<void>();
+      executions.length = 0;
+      let dispatched = 0;
+      executeBridge = async () => { dispatched++; };
+      configuration = async () => true;
+      startProcess = () => { starting.resolve(); return ready.promise; };
+      try {
+        const request = operation === "code cell"
+          ? execute(document.getCells())
+          : assert.rejects(c.renderText(document, "text"), TextRenderCancelledError);
+        await starting.promise;
+        const process = processes.at(-1)!;
+        if (operation === "code cell") executions.forEach(execution => execution.cancel());
+        else await c.refreshMarkdown(document);
+        await request;
+        assert.equal(process.running, false, "Cancellation waited for startup to complete");
+        assert.equal(dispatched, 0);
+        if (operation === "code cell") assert.deepEqual(executions.map(e => e.ended), [1, 1]);
+        assert.equal(c.hasSession(document.uri), true, "Cancellation discarded shared startup");
+        const next = operation === "code cell"
+          ? execute([document.getCells()[0]!]) : c.renderText(document, "text");
+        await new Promise<void>(resolve => setImmediate(resolve));
+        ready.resolve();
+        await next;
+        assert.equal(process.starts, 1, "The next request duplicated startup");
+        assert.equal(process.running, true);
+      } finally {
+        ready.resolve();
+        startProcess = async () => {};
+        executeBridge = async () => {};
+        await c.dispose();
+      }
+    });
+  }
 
   for (const operation of ["code cell", "native text"] as const) {
     await t.test(`${operation} interruption failure drops the stopped session and allows a fresh run`, async () => {

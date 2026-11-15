@@ -21,6 +21,7 @@ import {
   type BridgeOutput,
 } from "../Runtime/bridge";
 import { RInterruptError, type HiddenRProcess } from "../Runtime/process";
+import { RStartupCancelledError, waitForRStartup } from "../Runtime/startup";
 import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
@@ -478,10 +479,10 @@ export class RNotebookController implements vscode.Disposable {
       }
       this.attachment.beginExecution(session.process);
       try {
-        await this.ensureSessionStarted(
+        await waitForRStartup(this.ensureSessionStarted(
           session,
           this.selectedNotebookKey === sessionKey
-        );
+        ), cancellation.token);
         const html = await session.bridge.renderText(
           nativeDocument.replacements,
           nativeDocument.source,
@@ -497,6 +498,7 @@ export class RNotebookController implements vscode.Disposable {
         }
         return html;
       } catch (error) {
+        if (error instanceof RStartupCancelledError) throw new TextRenderCancelledError();
         if (error instanceof RInterruptError && !session.stopped) {
           await this.shutdownSession(notebook.uri);
         }
@@ -753,10 +755,10 @@ export class RNotebookController implements vscode.Disposable {
 
       this.attachment.beginExecution(session.process);
       try {
-        await this.ensureSessionStarted(
+        await waitForRStartup(this.ensureSessionStarted(
           session,
           this.selectedNotebookKey === cell.notebook.uri.toString()
-        );
+        ), execution.token);
         const result = await session.bridge.execute(
           chunkSource,
           cell.notebook.uri.fsPath,

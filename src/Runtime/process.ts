@@ -7,6 +7,8 @@ import {
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import type { CancellationToken } from "vscode";
+import { RStartupCancelledError, waitForRStartup } from "./startup";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,7 +35,7 @@ export interface InlineDispatch {
 }
 
 export interface InlineRTransport {
-  send(command: string): Promise<InlineDispatch>;
+  send(command: string, token?: CancellationToken): Promise<InlineDispatch>;
   interrupt(): Promise<void>;
 }
 
@@ -425,8 +427,10 @@ export class HiddenRProcess implements InlineRTransport {
     return processId;
   }
 
-  async send(command: string): Promise<InlineDispatch> {
-    const child = await this.getProcess();
+  async send(command: string, token?: CancellationToken): Promise<InlineDispatch> {
+    if (token?.isCancellationRequested) throw new RStartupCancelledError();
+    const child = await waitForRStartup(this.getProcess(), token);
+    if (token?.isCancellationRequested) throw new RStartupCancelledError();
     if (child.exitCode !== null || child.signalCode !== null) {
       throw exitError(child.exitCode, child.signalCode);
     }

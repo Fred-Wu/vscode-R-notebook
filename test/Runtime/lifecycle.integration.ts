@@ -84,6 +84,75 @@ test("real R interruption preserves the session and shutdown exits the process",
 
 const cancellationCases = (["native text", "code cell"] as const).flatMap(operation =>
   [false, true].map(duringLoad => ({ operation, duringLoad })));
+
+for (const operation of ["native text", "code cell"] as const) {
+  test(`${operation} cancellation during initialization preserves shared startup without dispatching stale work`, { timeout: 15000 }, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-start-cancel-"));
+    const document = path.join(directory, "test.Rmd");
+    const release = path.join(directory, "release");
+    const initializing = path.join(directory, "initializing");
+    let enteredInitialization!: () => void;
+    const entered = new Promise<void>(resolve => { enteredInitialization = resolve; });
+    const watcher = watch(directory, (_event, name) => {
+      if (name?.toString() === "initializing") enteredInitialization();
+    });
+    const messages: string[] = [];
+    const r = new HiddenRProcess(async () => ({
+      executable: process.env.R_EXECUTABLE || (process.platform === "win32" ? "R.exe" : "R"),
+      args: ["--vanilla", "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
+      cwd: directory, env: { ...process.env },
+      initialization: {
+        command: `writeLines('started', ${JSON.stringify(initializing.replaceAll("\\", "/"))}); while (!file.exists(${JSON.stringify(release.replaceAll("\\", "/"))})) Sys.sleep(0.02); cat("\\nREADY:", Sys.getpid(), "\\n", sep="")`,
+        successMarker: "READY:", failureMarker: "FAILED:",
+      },
+    }), message => messages.push(message));
+    t.signal.addEventListener("abort", () => r.dispose(), { once: true });
+    const listeners = new Set<(event: unknown) => unknown>();
+    let subscribed!: () => void;
+    const waiting = new Promise<void>(resolve => { subscribed = resolve; });
+    const token = {
+      isCancellationRequested: false,
+      onCancellationRequested(listener: (event: unknown) => unknown) {
+        listeners.add(listener);
+        subscribed();
+        return { dispose: () => { listeners.delete(listener); } };
+      },
+    };
+    const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), r);
+    const startup = r.start();
+    void startup.catch(() => undefined);
+    try {
+      await fs.writeFile(document, "Hello\n");
+      const request = operation === "code cell"
+        ? bridge.execute("```{r}\nstop('cancelled cell ran')\n```", document, token)
+          .then(result => assert.deepEqual(result, { success: false, outputs: [] }))
+        : assert.rejects(bridge.renderText([], "Hello\n", document, token), TextRenderCancelledError);
+      await Promise.all([waiting, entered]);
+      token.isCancellationRequested = true;
+      listeners.forEach(listener => listener(undefined));
+      await request;
+      assert.equal(r.running, false, "Cancellation waited for initialization");
+      assert.equal(listeners.size, 0, "Startup cancellation leaked its listener");
+      await fs.writeFile(release, "ready");
+      await startup;
+      const pid = r.processId;
+      const result = await bridge.execute("```{r}\n42L\n```", document, {
+        isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }),
+      });
+      assert.equal(result.success, true);
+      assert.ok(result.outputs.some(output => Buffer.from(output.data).toString().includes("42")));
+      assert.equal(r.processId, pid);
+      assert.ok(!messages.some(message => /cannot open|cancelled cell ran/i.test(message)),
+        "Cancelled work was dispatched after its request files were removed");
+    } finally {
+      watcher.close();
+      await r.dispose();
+      await startup.catch(() => undefined);
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+}
+
 for (const { operation, duringLoad } of cancellationCases) {
   test(`${operation} cancellation ${duringLoad ? "during helper loading" : "before R accepts the request"} completes and preserves R`, { timeout: 20000 }, async (t) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-render-cancel-"));
