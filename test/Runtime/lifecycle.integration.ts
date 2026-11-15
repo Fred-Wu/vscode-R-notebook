@@ -16,7 +16,7 @@ test("real R interruption preserves the session and shutdown exits the process",
     args: ["--vanilla", "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
     cwd: directory, env: { ...process.env },
     initialization: {
-      command: 'cat("NOTEBOOK_TEST_READY:", Sys.getpid(), "\\n", sep="")',
+      command: 'cat("\\nNOTEBOOK_TEST_READY:", Sys.getpid(), "\\n", sep="")',
       successMarker: "NOTEBOOK_TEST_READY:", failureMarker: "NOTEBOOK_TEST_ERROR:",
     },
   }), () => undefined);

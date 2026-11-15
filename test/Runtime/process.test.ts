@@ -55,6 +55,44 @@ function waitForFile(filePath: string): Promise<void> {
   });
 }
 
+for (const result of ["success", "failure", "invalid PID"] as const) {
+  test(`initialization ignores echoed R commands and reads fragmented ${result} records`, async (t) => {
+    const hidden = new HiddenRProcess(async () => ({
+      executable: process.execPath,
+      args: ["-e", String.raw`
+        const lines = require("node:readline").createInterface({ input: process.stdin });
+        lines.on("line", line => {
+          // Interactive R on POSIX echoes source before printing the result.
+          process.stdout.write("> " + line + "\n");
+          const mode = process.env.INIT_RESULT;
+          const record = mode === "failure" ? "FAILED expected failure\r\n"
+            : "READY " + (mode === "success" ? process.pid : "not-a-pid") + "\r\n";
+          process.stdout.write(record.slice(0, 3));
+          setTimeout(() => {
+            process.stdout.write(record.slice(3, -1));
+            setTimeout(() => process.stdout.write("\n"), 10);
+          }, 10);
+        });
+      `],
+      cwd: os.tmpdir(), env: { ...process.env, INIT_RESULT: result },
+      initialization: {
+        command: 'local({ cat("READY ", Sys.getpid(), "\\n"); cat("FAILED ", "message", "\\n") })',
+        successMarker: "READY ", failureMarker: "FAILED ",
+      },
+    }), () => undefined);
+    t.after(() => hidden.dispose());
+    if (result === "success") {
+      await hidden.start();
+      const pid = hidden.processId;
+      assert.ok(pid);
+      assert.equal(await hidden.reattach(), pid);
+    } else {
+      await assert.rejects(hidden.start(), result === "failure"
+        ? /expected failure/ : /invalid R process ID/);
+    }
+  });
+}
+
 test("keeps state in one hidden process and isolates different processes", async (t) => {
   const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-process-test-"));
   const launchOptions = async () => ({

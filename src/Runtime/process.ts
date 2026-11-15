@@ -47,6 +47,7 @@ export interface HiddenRLaunchOptions {
     command: string;
     attachmentId?: string;
     preparation?: { dispose(): void };
+    // Emit markers at the start of their own lines, after any R prompt/output.
     successMarker: string;
     failureMarker: string;
   };
@@ -200,14 +201,16 @@ export class HiddenRProcess implements InlineRTransport {
         }
       };
       const onData = (data: Buffer): void => {
-        output = (output + data.toString("utf8")).slice(-16384);
-        const successStart = output.indexOf(initialization.successMarker);
-        if (successStart >= 0) {
-          const processIdStart = successStart + initialization.successMarker.length;
-          const processIdEnd = output.indexOf("\n", processIdStart);
-          if (processIdEnd >= 0) {
+        output += data.toString("utf8");
+        let newline: number;
+        while ((newline = output.indexOf("\n")) >= 0) {
+          const line = output.slice(0, newline).replace(/\r$/, "");
+          output = output.slice(newline + 1);
+          // Interactive R may echo the command containing both markers.
+          // Only complete response lines belong to the attachment protocol.
+          if (line.startsWith(initialization.successMarker)) {
             const processId = Number(
-              output.slice(processIdStart, processIdEnd).trim()
+              line.slice(initialization.successMarker.length).trim()
             );
             if (Number.isSafeInteger(processId) && processId > 0) {
               finish(processId);
@@ -219,16 +222,13 @@ export class HiddenRProcess implements InlineRTransport {
             }
             return;
           }
-        }
-        const failureStart = output.indexOf(initialization.failureMarker);
-        if (failureStart >= 0) {
-          const messageStart = failureStart + initialization.failureMarker.length;
-          const messageEnd = output.indexOf("\n", messageStart);
-          if (messageEnd >= 0) {
-            const message = output.slice(messageStart, messageEnd).trim();
+          if (line.startsWith(initialization.failureMarker)) {
+            const message = line.slice(initialization.failureMarker.length).trim();
             finish(undefined, new Error(message || "vscode-R session attachment failed."));
+            return;
           }
         }
+        output = output.slice(-16384);
       };
       const onInputError = (error: Error): void => {
         finish(undefined, new Error(`Could not initialise inline R: ${error.message}`));
