@@ -276,7 +276,7 @@
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^24.13.3",
+    "@types/node": "^26.6.6",
     "@types/vscode": "1.85.0",
     "@types/vscode-notebook-renderer": "^1.72.4",
     "@vscode/vsce": "^3.7.1",
