@@ -283,6 +283,37 @@ for (const failure of ["spawn", "invalid executable", "initialization"] as const
   });
 }
 
+test("disposal during initialization failure waits for the existing termination", async () => {
+  let released!: () => void;
+  const preparationReleased = new Promise<void>((resolve) => { released = resolve; });
+  const hidden = new HiddenRProcess(async () => ({
+    executable: process.execPath,
+    args: ["-e", String.raw`process.stdin.on("data", () => process.stdout.write("FAILED expected failure\n"));`],
+    cwd: os.tmpdir(), env: { ...process.env },
+    initialization: {
+      command: "init", successMarker: "READY ", failureMarker: "FAILED ",
+      preparation: { dispose: released },
+    },
+  }), () => undefined);
+  // Capture the owned child to check its exit event rather than PID reuse or
+  // platform-specific zombie reaping after termination.
+  const owned = hidden as unknown as { child?: import("node:child_process").ChildProcess };
+  const starting = assert.rejects(hidden.start(), /expected failure/);
+  let child: import("node:child_process").ChildProcess | undefined;
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    child = owned.child;
+    assert.ok(child);
+    await preparationReleased;
+    await hidden.dispose();
+    assert.ok(child.exitCode !== null || child.signalCode !== null,
+      "Disposal returned before initialization failure terminated the process");
+  } finally {
+    await starting;
+    await hidden.dispose();
+  }
+});
+
 test("shutdown terminates render subprocesses as well as their parent", async (t) => {
   const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "hidden-r-tree-test-"));
   const hidden = new HiddenRProcess(async () => ({

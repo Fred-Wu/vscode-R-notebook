@@ -20,7 +20,7 @@ import {
   TextRenderCancelledError,
   type BridgeOutput,
 } from "../Runtime/bridge";
-import { type HiddenRProcess } from "../Runtime/process";
+import { RInterruptError, type HiddenRProcess } from "../Runtime/process";
 import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
@@ -496,6 +496,11 @@ export class RNotebookController implements vscode.Disposable {
           });
         }
         return html;
+      } catch (error) {
+        if (error instanceof RInterruptError && !session.stopped) {
+          await this.shutdownSession(notebook.uri);
+        }
+        throw error;
       } finally {
         if (!session.stopped) {
           await this.attachment.endExecution(session.process);
@@ -787,7 +792,11 @@ export class RNotebookController implements vscode.Disposable {
         }
       }
     } catch (error) {
-      if (!session.stopped && !execution.token.isCancellationRequested) {
+      if (error instanceof RInterruptError && !session.stopped) {
+        this.output.appendLine(error.message);
+        void vscode.window.showErrorMessage(error.message);
+        await this.shutdownSession(cell.notebook.uri);
+      } else if (!session.stopped && !execution.token.isCancellationRequested) {
         const result = error instanceof Error ? error : new Error(String(error));
         await execution.replaceOutput([
           new vscode.NotebookCellOutput([vscode.NotebookCellOutputItem.error(result)]),

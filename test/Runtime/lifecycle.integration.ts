@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { HiddenRProcess } from "../../src/Runtime/process";
+import { HiddenRProcess, RInterruptError } from "../../src/Runtime/process";
 import { RExecutionBridge, TextRenderCancelledError } from "../../src/Runtime/bridge";
 
 test("real R interruption preserves the session and shutdown exits the process", { timeout: 60000 }, async (t) => {
@@ -146,6 +146,102 @@ for (const { operation, duringLoad } of cancellationCases) {
       watcher.close();
       await r.dispose();
       await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+}
+
+for (const operation of ["native text", "code cell"] as const) {
+  test(`${operation} waits for R cleanup after the result is written`, { timeout: 20000 }, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-completion-"));
+    const document = path.join(directory, "test.Rmd");
+    const helper = path.join(directory, "helper.R");
+    const unwound = path.join(directory, "unwound");
+    const r = new HiddenRProcess(async () => ({
+      executable: process.env.R_EXECUTABLE || (process.platform === "win32" ? "R.exe" : "R"),
+      args: ["--vanilla", "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
+      cwd: directory, env: { ...process.env },
+    }), () => undefined);
+    t.signal.addEventListener("abort", () => r.dispose(), { once: true });
+    try {
+      await fs.writeFile(document, "text\n");
+      await fs.writeFile(helper, [
+        "r_notebook_execute <- r_notebook_render_text <- function(output_dir, ...) {",
+        `  on.exit({ Sys.sleep(0.3); writeLines('unwound', ${JSON.stringify(unwound.replaceAll("\\", "/"))}) })`,
+        "  writeLines('<p>rendered</p>', file.path(output_dir, 'result.html'))",
+        "  writeLines('true', file.path(output_dir, 'done'))",
+        "}",
+      ].join("\n"));
+      const bridge = new RExecutionBridge(helper, r);
+      if (operation === "native text") {
+        assert.match(await bridge.renderText([], "text\n", document), /rendered/);
+      } else {
+        assert.equal((await bridge.execute("```{r}\n42\n```", document, {
+          isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }),
+        })).success, true);
+      }
+      assert.equal((await fs.readFile(unwound, "utf8")).trim(), "unwound",
+        "The bridge returned before R finished unwinding the request");
+    } finally {
+      await r.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test(`${operation} stops R before reporting a failed interruption`, { timeout: 20000 }, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-interrupt-failure-"));
+    const document = path.join(directory, "test.Rmd");
+    const helper = path.join(directory, "helper.R");
+    let cancel!: () => void;
+    let requestPath = "";
+    const token = {
+      isCancellationRequested: false,
+      onCancellationRequested: (listener: (event: unknown) => unknown) => {
+        cancel = () => { listener(undefined); };
+        return { dispose() {} };
+      },
+    };
+    const r = new HiddenRProcess(async () => ({
+      executable: process.env.R_EXECUTABLE || (process.platform === "win32" ? "R.exe" : "R"),
+      args: ["--vanilla", "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
+      cwd: directory, env: { ...process.env },
+      interrupt: async () => { throw new Error("test interrupt failure"); },
+    }), () => undefined);
+    t.signal.addEventListener("abort", () => r.dispose(), { once: true });
+    const watcher = watch(directory, (_event, name) => {
+      if (name?.toString() === "busy") {
+        token.isCancellationRequested = true;
+        cancel?.();
+      }
+    });
+    try {
+      await fs.writeFile(document, "text\n");
+      await fs.writeFile(helper, [
+        `writeLines('busy', ${JSON.stringify(path.join(directory, "busy").replaceAll("\\", "/"))})`,
+        "repeat Sys.sleep(0.05)",
+      ].join("\n"));
+      const bridge = new RExecutionBridge(helper, {
+        send: (command) => {
+          requestPath = JSON.parse(command.match(/^base::source\(("(?:\\.|[^"])*")/)![1]!);
+          return r.send(command);
+        },
+        interrupt: () => r.interrupt(),
+      });
+      const execution = operation === "native text"
+        ? bridge.renderText([], "text\n", document, token)
+        : bridge.execute("```{r}\n42\n```", document, token);
+      await assert.rejects(execution, (error: unknown) => {
+        assert.ok(error instanceof RInterruptError);
+        assert.match(error.message, /test interrupt failure/);
+        assert.match(error.message, /session was stopped/);
+        return true;
+      });
+      assert.equal(r.running, false);
+      await assert.rejects(r.send("42"), /session has closed/);
+      await assert.rejects(fs.access(path.dirname(requestPath)), { code: "ENOENT" });
+    } finally {
+      watcher.close();
+      await r.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
     }
   });
 }

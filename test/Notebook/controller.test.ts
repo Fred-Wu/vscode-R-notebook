@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import Module from "node:module";
 import test from "node:test";
 import type * as vscode from "vscode";
+import { RInterruptError } from "../../src/Runtime/process";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -35,6 +36,8 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   let selectAttachment = async () => {};
   const metadataUpdates: unknown[] = [];
   let textRenders = 0;
+  let renderFailure: Error | undefined;
+  const shownErrors: string[] = [];
   type Edit = { edits: Array<{ notebookMetadata?: object } | undefined> };
   let applyEdit = async (_edit: Edit) => true;
   const api = {
@@ -62,7 +65,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     },
     workspace: { isTrusted: true, applyEdit: (edit: Edit) => applyEdit(edit),
       getConfiguration: () => ({ get: () => 0 }) },
-    window: { setStatusBarMessage() {} },
+    window: { setStatusBarMessage() {}, showErrorMessage(message: string) { shownErrors.push(message); } },
     notebooks: {
       createNotebookController: () => ({
         set executeHandler(handler: typeof execute) { execute = handler; },
@@ -94,6 +97,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
           return { success: !token.isCancellationRequested, outputs: [] };
         }
         async renderText() {
+          if (renderFailure) throw renderFailure;
           return `<div id="r-notebook-markdown-text">Render ${++textRenders}</div>`;
         }
       },
@@ -323,6 +327,47 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
       assert.equal(dispatched.length, 2);
     } finally { c.dispose(); }
   });
+
+  for (const operation of ["code cell", "native text"] as const) {
+    await t.test(`${operation} interruption failure drops the stopped session and allows a fresh run`, async () => {
+      const c = controller();
+      const document = notebook(operation === "code cell" ? "code" : "markup");
+      const failure = new RInterruptError("Interruption failed; R was stopped.");
+      executions.length = 0;
+      shownErrors.length = 0;
+      configuration = async () => true;
+      let dispatched = 0;
+      try {
+        if (operation === "code cell") {
+          executeBridge = async () => {
+            dispatched++;
+            executions[0]!.cancel();
+            throw failure;
+          };
+          await execute(document.getCells());
+          assert.deepEqual(shownErrors, [failure.message], "Cancellation hid the interrupt failure");
+          assert.equal(dispatched, 1, "A queued cell ran on the failed session");
+          assert.deepEqual(executions.map((execution) => [execution.started, execution.ended]), [[true, 1], [false, 1]]);
+        } else {
+          renderFailure = failure;
+          await assert.rejects(c.renderText(document, "text"), (error: unknown) => error === failure);
+        }
+        assert.equal(c.hasSession(document.uri), false);
+        assert.equal(processes.at(-1)!.running, false);
+        const count = processes.length;
+        executeBridge = async () => {};
+        renderFailure = undefined;
+        if (operation === "code cell") await execute([document.getCells()[0]!]);
+        else await c.renderText(document, "text");
+        assert.equal(processes.length, count + 1);
+        assert.equal(processes.at(-1)!.starts, 1);
+      } finally {
+        executeBridge = async () => {};
+        renderFailure = undefined;
+        await c.dispose();
+      }
+    });
+  }
 
   for (const hasProject of [true, false]) {
     await t.test(`shutdown during project lookup cannot recreate a session (project=${hasProject})`, async () => {

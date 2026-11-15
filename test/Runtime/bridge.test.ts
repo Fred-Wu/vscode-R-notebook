@@ -47,6 +47,7 @@ class TestRTransport implements InlineRTransport {
       "utf8"
     );
     await fsPromises.writeFile(path.join(outputDirectory, "done"), "true\n", "utf8");
+    await fsPromises.writeFile(path.join(outputDirectory, "finished"), "finished\n", "utf8");
 
     return {
       failure: new Promise<never>(() => undefined),

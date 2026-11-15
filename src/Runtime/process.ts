@@ -37,6 +37,8 @@ export interface InlineRTransport {
   interrupt(): Promise<void>;
 }
 
+export class RInterruptError extends Error {}
+
 export interface HiddenRLaunchOptions {
   executable: string;
   args: string[];
@@ -334,8 +336,15 @@ export class HiddenRProcess implements InlineRTransport {
         this.rProcessId = await this.initialize(child, options.initialization);
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
+        const stopping = this.stopping ??= terminateRProcess(child);
         this.clearProcess(child);
-        await terminateRProcess(child);
+        try {
+          await stopping;
+        } finally {
+          // A failed start can be retried, but concurrent disposal must retain
+          // the same termination promise until the process has exited.
+          if (!this.disposed) this.stopping = undefined;
+        }
         throw error;
       }
     }
@@ -492,17 +501,19 @@ export class HiddenRProcess implements InlineRTransport {
     if (!options || processId === undefined) {
       return Promise.reject(new Error("Cannot interrupt inline R: its launch context is unavailable."));
     }
-    if (options.interrupt) {
-      this.currentInterruption = options.interrupt(processId);
-    } else if (process.platform === "win32") {
-      this.currentInterruption = interruptWindowsRProcess(options, processId);
-    } else if (child.kill("SIGINT")) {
-      this.currentInterruption = Promise.resolve();
-    } else {
-      this.currentInterruption = Promise.reject(
-        new Error("Could not send SIGINT to the inline R process.")
-      );
-    }
+    this.currentInterruption = Promise.resolve().then(() => {
+      if (options.interrupt) return options.interrupt(processId);
+      if (process.platform === "win32") return interruptWindowsRProcess(options, processId);
+      if (!child.kill("SIGINT")) throw new Error("Could not send SIGINT to the inline R process.");
+    }).catch(async (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      try {
+        await this.dispose();
+      } catch (shutdownError) {
+        throw new RInterruptError(`R interruption failed (${detail}), and its session could not be stopped: ${String(shutdownError)}`);
+      }
+      throw new RInterruptError(`R interruption failed (${detail}). The R session was stopped and its objects were lost. Run a cell to start a new session.`);
+    });
     return this.currentInterruption;
   }
 
@@ -523,7 +534,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (wasRunning) {
       this.runningChanged(false);
     }
-    this.stopping = child ? terminateRProcess(child) : Promise.resolve();
+    this.stopping ??= child ? terminateRProcess(child) : Promise.resolve();
     // VS Code can call dispose without awaiting it. Keep failures observable
     // while still returning the promise to explicit shutdown/deactivation.
     void this.stopping.catch((error: unknown) => this.log(`Could not stop inline R: ${String(error)}`));

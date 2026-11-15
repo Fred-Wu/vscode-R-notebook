@@ -51,6 +51,10 @@ function interruptibleRequest(requestDirectory: string, body: readonly string[])
     `      base::writeLines('false', ${rString(path.join(requestDirectory, ".done"))})`,
     `      base::file.rename(${rString(path.join(requestDirectory, ".done"))}, ${rString(path.join(requestDirectory, "done"))})`,
     "    }",
+    // The helper's `done` file carries the result. Only this outer handler can
+    // acknowledge that all helper on.exit handlers have finished using files.
+    `    base::writeLines('finished', ${rString(path.join(requestDirectory, ".finished"))})`,
+    `    base::file.rename(${rString(path.join(requestDirectory, ".finished"))}, ${rString(path.join(requestDirectory, "finished"))})`,
     "  }, add = TRUE)",
     `  base::writeLines('ready', ${rString(path.join(requestDirectory, "ready"))})`,
     "  base::allowInterrupts({",
@@ -319,7 +323,7 @@ export class RExecutionBridge {
         ]),
         "utf8"
       );
-      completion = waitForDone(requestDirectory);
+      completion = waitForDone(requestDirectory, "finished");
       ready = waitForDone(requestDirectory, "ready");
       if (token.isCancellationRequested) {
         return { success: false, outputs: [] };
@@ -354,6 +358,11 @@ export class RExecutionBridge {
         return { success: false, outputs: [] };
       }
       return await readResult(requestDirectory);
+    } catch (error) {
+      // A failed interrupt stops R. Await that shutdown even if its process-exit
+      // notification wins the race, and preserve the actionable interrupt error.
+      if (cancelled) await interruptCompletion;
+      throw error;
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
@@ -409,7 +418,7 @@ export class RExecutionBridge {
         ]),
         "utf8"
       );
-      completion = waitForDone(requestDirectory);
+      completion = waitForDone(requestDirectory, "finished");
       ready = waitForDone(requestDirectory, "ready");
       if (token?.isCancellationRequested) {
         throw new TextRenderCancelledError();
@@ -442,6 +451,9 @@ export class RExecutionBridge {
         throw new TextRenderCancelledError();
       }
       return await readTextResult(requestDirectory);
+    } catch (error) {
+      if (cancelled) await interruptCompletion;
+      throw error;
     } finally {
       cancellation?.dispose();
       dispatch?.dispose();
