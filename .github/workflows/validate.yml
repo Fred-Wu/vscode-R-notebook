@@ -54,6 +54,9 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/vscode"
           curl --fail --location --retry 3 https://update.code.visualstudio.com/latest/linux-x64/stable | tar -xz -C "${RUNNER_TEMP}/vscode" --strip-components=1
+          # The tarball needs its Chromium sandbox helper installed with setuid permissions.
+          sudo chown root:root "${RUNNER_TEMP}/vscode/chrome-sandbox"
+          sudo chmod 4755 "${RUNNER_TEMP}/vscode/chrome-sandbox"
           "${RUNNER_TEMP}/vscode/bin/code" --user-data-dir="${RUNNER_TEMP}/code-install-profile" --extensions-dir="${RUNNER_TEMP}/vscode-extensions" --install-extension REditorSupport.r --install-extension RConsole.vsc-r-console --force
           echo "VSCODE_EXECUTABLE=${RUNNER_TEMP}/vscode/code" >> "${GITHUB_ENV}"
           echo "VSCODE_EXTENSIONS_DIR=${RUNNER_TEMP}/vscode-extensions" >> "${GITHUB_ENV}"
