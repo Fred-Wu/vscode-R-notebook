@@ -2,9 +2,13 @@ name: Validate R Notebook
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/workflows/release.yml'
+  # main and version tags run validation through release.yml.
+  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
