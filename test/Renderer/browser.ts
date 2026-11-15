@@ -232,6 +232,58 @@ async function run(): Promise<void> {
     resultsLink.click();
     check(sent.at(-1)?.markupId === fixture.cells[1]?.id && sent.at(-1)?.label === "results",
       `${fixture.name}: native TOC navigation failed`);
+
+    check(fixtureCell.textContent?.includes("fenced preview example executed") &&
+      fixtureCell.textContent.includes("indented preview example executed") &&
+      fixtureCell.textContent.includes("nested chunk example executed") &&
+      fixtureCell.textContent.includes("Live value: 42."),
+      `${fixture.name}: literal examples or evaluated inline text were lost`);
+    const noteLink = fixtureCell.querySelector<HTMLAnchorElement>('a[href="#fn1"]');
+    const last = fixture.cells.at(-1)!;
+    check(noteLink?.dataset.rNotebookTargetCell === last.id,
+      `${fixture.name}: a footnote cannot reveal its unrendered destination cell`);
+    noteLink.click();
+    check(sent.at(-1)?.markupId === last.id && sent.at(-1)?.label === "fn1",
+      `${fixture.name}: footnote navigation failed`);
+    const noteScrolls: string[] = [];
+    HTMLElement.prototype.scrollIntoView = function() { noteScrolls.push(this.id); };
+    receive({ type: "rNotebook.revealAnchor", markupId: last.id, label: "fn1" });
+    const lastHost = document.createElement("div");
+    document.body.append(lastHost);
+    const lastCell = mountCell(last.id, "Results", lastHost.attachShadow({ mode: "open" }));
+    const respondToLast = (html: string) => receive({
+      type: "rNotebook.textResult", requestId: lastCell.dataset.rNotebookTextRequest,
+      documentId: fixture.name, marker: last.marker, html, cells: fixture.cells,
+    });
+    respondToLast(fixture.html);
+    await settled(lastCell);
+    check(noteScrolls.at(-1) === "fn1" &&
+      lastCell.querySelector("#fn1")?.textContent?.includes("A shared native footnote.") &&
+      lastCell.querySelector("#fn1")!.getBoundingClientRect().height > 0,
+      `${fixture.name}: the definition was not rendered and revealed`);
+    const backlinks = lastCell.querySelectorAll<HTMLAnchorElement>('a[href^="#fnref"]');
+    check(backlinks.length === 2 && backlinks[0]?.dataset.rNotebookTargetCell === cell.id &&
+      backlinks[1]?.dataset.rNotebookTargetCell === last.id,
+      `${fixture.name}: repeated footnote backlinks lost their cell owners`);
+    backlinks[0]!.click();
+    check(sent.at(-1)?.markupId === cell.id && sent.at(-1)?.label === "fnref1",
+      `${fixture.name}: footnote backlink navigation failed`);
+    receive({ type: "rNotebook.revealAnchor", markupId: cell.id, label: "fnref1" });
+    check(noteScrolls.at(-1) === "fnref1", `${fixture.name}: backlink did not reveal its reference`);
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    receive({ type: "rNotebook.refreshText" });
+    respondToLast(fixture.html.replace("A shared native footnote.", "Updated native footnote."));
+    await settled(lastCell);
+    check(lastCell.querySelectorAll("#fn1").length === 1 &&
+      lastCell.querySelector("#fn1")?.textContent?.includes("Updated native footnote."),
+      `${fixture.name}: refresh duplicated the footnote or kept stale text`);
+    const withoutNotes = new DOMParser().parseFromString(fixture.html, "text/html");
+    withoutNotes.querySelectorAll('.footnotes, [role="doc-endnotes"]').forEach(node => node.remove());
+    receive({ type: "rNotebook.refreshText" });
+    respondToLast(withoutNotes.documentElement.outerHTML);
+    await settled(lastCell);
+    check(!lastCell.querySelector("#fn1"), `${fixture.name}: removed footnotes remain visible`);
   }
 }
 

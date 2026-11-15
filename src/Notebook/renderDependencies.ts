@@ -5,7 +5,15 @@ import { readFile } from "node:fs/promises";
 const renderExtensions = new Set([
   ".bib", ".csl", ".css", ".scss", ".md", ".markdown", ".qmd", ".rmd",
   ".html", ".htm", ".js", ".svg", ".lua", ".py",
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp",
+  ".tif", ".tiff", ".ico", ".pdf", ".eps",
 ]);
+
+// Use the same extensions for filtering and watching, including mixed casing.
+export const TEXT_RENDER_DEPENDENCY_GLOB = "**/*.{" + [...renderExtensions]
+  .map((extension) => extension.slice(1).replace(/[a-z]/g,
+    (letter) => `[${letter}${letter.toUpperCase()}]`))
+  .join(",") + "}";
 
 export function isTextRenderDependency(filePath: string): boolean {
   return renderExtensions.has(path.extname(filePath).toLowerCase());
@@ -20,7 +28,11 @@ export function sourceReferencesDependency(
   resourcePath: string
 ): boolean {
   const name = path.basename(resourcePath).replace(/\\/g, "/");
-  return name.length > 0 && source.includes(name);
+  const decoded = source.replace(/(?:%[0-9a-f]{2})+/gi, (value) => {
+    try { return decodeURIComponent(value); }
+    catch { return value; }
+  });
+  return name.length > 0 && decoded.includes(name);
 }
 
 /** Quarto resources may be declared by the project rather than the document. */

@@ -376,11 +376,9 @@ export class RNotebookController implements vscode.Disposable {
       return;
     }
     const updated = { ...notebook.metadata } as RNotebookDocumentMetadata;
-    if (cache) {
-      updated.rNotebookTextCache = cache;
-    } else {
-      delete updated.rNotebookTextCache;
-    }
+    // VS Code merges notebook metadata on the extension host. Omitting a key
+    // leaves its old value visible there; null explicitly invalidates the cache.
+    updated.rNotebookTextCache = cache ?? null;
     const edit = new vscode.WorkspaceEdit();
     edit.set(notebook.uri, [vscode.NotebookEdit.updateNotebookMetadata(updated)]);
     if (!await vscode.workspace.applyEdit(edit)) {
@@ -774,6 +772,11 @@ export class RNotebookController implements vscode.Disposable {
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
     this.controller.dispose();
-    await Promise.all(this.stopping);
+    const stopped = await Promise.allSettled(this.stopping);
+    const errors = stopped.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []);
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Could not stop all notebook R sessions.");
+    }
   }
 }

@@ -1,10 +1,6 @@
 name: Validate R Notebook
 
 on:
-  push:
-    branches:
-      - main
-      - fix/**
   pull_request:
 
 permissions:

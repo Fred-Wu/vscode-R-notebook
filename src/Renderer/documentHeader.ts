@@ -58,6 +58,19 @@ export function nativeDocumentHeader(nativeDocument: Document): HTMLElement | un
   return header.childNodes.length > 0 ? header : undefined;
 }
 
+/** Give Pandoc's document-end notes a cell owner before resolving any links. */
+export function attachDocumentFootnotes(nativeDocument: Document): void {
+  const lastCell = Array.from(nativeDocument.querySelectorAll(
+    ".r-notebook-markdown-cell"
+  )).at(-1);
+  if (!lastCell) return;
+  for (const notes of nativeDocument.querySelectorAll(
+    '.footnotes, [role="doc-endnotes"]'
+  )) {
+    if (!notes.closest(".r-notebook-markdown-cell")) lastCell.append(notes);
+  }
+}
+
 /** Native IDs handle explicit labels, duplicate headings, and Pandoc's slug rules. */
 export function annotateReferenceLinks(
   fragment: DocumentFragment,

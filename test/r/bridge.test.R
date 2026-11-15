@@ -179,7 +179,9 @@ for (toc in c(TRUE, FALSE)) {
   outline_document <- file.path(test_root, paste0("outline-", toc, ".Rmd"))
   writeLines(c(
     "---",
-    "title: 'Notebook *report*'",
+    "params:",
+    "  report_title: 'Notebook *report*'",
+    'title: "`r params$report_title`"',
     "author: Example Author",
     "date: '2026-10-17'",
     "output:",

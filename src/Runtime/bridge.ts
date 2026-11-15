@@ -120,7 +120,7 @@ async function readTextResult(requestDirectory: string): Promise<string> {
   return fsPromises.readFile(path.join(requestDirectory, "result.html"), "utf8");
 }
 
-function waitForDone(requestDirectory: string): { promise: Promise<void>; watcher: fs.FSWatcher } {
+function waitForDone(requestDirectory: string, filename = "done"): { promise: Promise<void>; watcher: fs.FSWatcher } {
   let resolveDone: (() => void) | undefined;
   let rejectDone: ((error: Error) => void) | undefined;
   let settled = false;
@@ -132,7 +132,7 @@ function waitForDone(requestDirectory: string): { promise: Promise<void>; watche
     if (settled) {
       return;
     }
-    fsPromises.access(path.join(requestDirectory, "done"), fs.constants.F_OK).then(
+    fsPromises.access(path.join(requestDirectory, filename), fs.constants.F_OK).then(
       () => {
         settled = true;
         resolveDone?.();
@@ -140,8 +140,8 @@ function waitForDone(requestDirectory: string): { promise: Promise<void>; watche
       () => undefined
     );
   };
-  const watcher = fs.watch(requestDirectory, (event, filename) => {
-    if (event === "rename" && filename?.toString() === "done") {
+  const watcher = fs.watch(requestDirectory, (event, changedName) => {
+    if (event === "rename" && changedName?.toString() === filename) {
       check();
     }
   });
@@ -347,6 +347,7 @@ export class RExecutionBridge {
     const cellsPath = path.join(requestDirectory, "cells.json");
     const requestPath = path.join(requestDirectory, "request.R");
     let completion: ReturnType<typeof waitForDone> | undefined;
+    let ready: ReturnType<typeof waitForDone> | undefined;
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
@@ -367,7 +368,18 @@ export class RExecutionBridge {
       await fsPromises.writeFile(
         requestPath,
         [
-          "local({",
+          // Do not interrupt helper loading before a completion handler exists.
+          // R acknowledges that handler under suspended interrupts, so even an
+          // immediate refresh can safely cancel the subsequent source() call.
+          "base::suspendInterrupts(base::local({",
+          "  base::on.exit({",
+          `    if (!base::file.exists(${rString(path.join(requestDirectory, "done"))})) {`,
+          `      base::writeLines('false', ${rString(path.join(requestDirectory, ".done"))})`,
+          `      base::file.rename(${rString(path.join(requestDirectory, ".done"))}, ${rString(path.join(requestDirectory, "done"))})`,
+          "    }",
+          "  }, add = TRUE)",
+          `  base::writeLines('ready', ${rString(path.join(requestDirectory, "ready"))})`,
+          "  base::allowInterrupts({",
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
           "  bridge$r_notebook_render_text(",
@@ -378,24 +390,33 @@ export class RExecutionBridge {
           "    evaluation_env = .GlobalEnv,",
           `    quarto_executable = ${rString(quartoExecutable)}`,
           "  )",
-          "})",
+          "  })",
+          "}))",
           "",
         ].join("\n"),
         "utf8"
       );
       completion = waitForDone(requestDirectory);
+      ready = waitForDone(requestDirectory, "ready");
       if (token?.isCancellationRequested) {
         throw new TextRenderCancelledError();
       }
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
+      const interruptible = Promise.race([
+        ready.promise.then(() => true),
+        completion.promise.then(() => false),
+        dispatch.failure,
+      ]);
+      void interruptible.catch(() => undefined);
       const interrupt = (): void => {
         if (cancelled) {
           return;
         }
         cancelled = true;
-        interruptCompletion = this.transport.interrupt();
+        interruptCompletion = interruptible.then((started) =>
+          started ? this.transport.interrupt() : undefined);
         void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token?.onCancellationRequested(interrupt);
@@ -412,6 +433,7 @@ export class RExecutionBridge {
       cancellation?.dispose();
       dispatch?.dispose();
       completion?.watcher.close();
+      ready?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }

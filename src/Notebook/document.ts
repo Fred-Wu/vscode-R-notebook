@@ -4,7 +4,7 @@ export const R_CELL_LANGUAGE = "r-notebook-r";
 export function isRLanguage(languageId: string): boolean {
   return languageId === "r" || languageId === R_CELL_LANGUAGE;
 }
-export const NATIVE_TEXT_VERSION = 15;
+export const NATIVE_TEXT_VERSION = 16;
 
 export interface NativeTextCache {
   version: number;
@@ -33,7 +33,7 @@ export interface RNotebookCellMetadata {
 
 export interface RNotebookDocumentMetadata {
   rNotebook?: { eol?: string };
-  rNotebookTextCache?: NativeTextCache;
+  rNotebookTextCache?: NativeTextCache | null;
 }
 
 interface ParsedDocument {

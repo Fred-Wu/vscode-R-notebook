@@ -15,9 +15,16 @@ exports.fixtureSource = (extension) => [
     "output:", "  word_document: default", "  html_document:", "    toc: true", "    toc_depth: 2",
   ]),
   "---", "", "An introductory paragraph immediately before the first heading.",
-  "# Introduction", "", "This section appears in the table of contents.", "",
+  "# Introduction", "", "This section appears in the table of contents.[^shared]", "",
+  "```text", "`r stop('fenced preview example executed')`", "```", "",
+  "    `r stop('indented preview example executed')`", "",
+  "````markdown", "```{r}", "stop('nested chunk example executed')", "```", "````", "",
+  "Live value: `r { notebook_preview_count <- get0('notebook_preview_count', ifnotfound=0L) + 1L; 42L }`.", "",
   "```{r}", "mean(c(2, 4, 6))", "```", "",
-  "# Results", "", "The code cell prints 4 when run.", "",
+  "# Results", "", "The code cell prints 4 when run.[^shared]", "",
+  "[^shared]: A shared native footnote.", "",
+  "~~~text", "`r stop('second cell example executed')`", "~~~", "",
+  "Second live value: `r { notebook_preview_count <- notebook_preview_count + 1L; 43L }`.", "",
   "## A plot", "", "```{r}", "plot(1:3)", "```", "",
 ].join("\n");
 
@@ -51,8 +58,10 @@ exports.nativeFixtures = () => {
       '  dir <- file.path(args[[2L]], directory)',
       '  extension <- sub("^[0-9]+-", "", directory)',
       '  output <- file.path(dir, "output"); dir.create(output)',
+      '  notebook_preview_count <- 0L',
       '  r_notebook_render_text(file.path(dir, "cells.json"), file.path(dir, paste0("rendering.", extension)), output, dir, .GlobalEnv)',
       '  if (!identical(readLines(file.path(output, "done")), "true")) stop(paste(readLines(file.path(output, "error.txt")), collapse="\\n"))',
+      '  stopifnot(identical(notebook_preview_count, 2L))',
       '}',
     ].join("\n");
     fs.writeFileSync(path.join(root, "render.R"), script);

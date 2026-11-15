@@ -165,4 +165,13 @@ test("only execution-dependent Markdown invalidates the text render", () => {
   assert.equal(executionMayChangeText(dynamic.cells), true);
   assert.equal(executionMayChangeText(parseDocument("The value is `r sum(\n1:3\n)`.\n").cells), true);
   assert.equal(executionMayChangeText(parseDocument("Static **bold** text.\n").cells), false);
+  for (const source of [
+    "![Latest plot](plot.png)",
+    "![Latest plot][plot]\n\n[plot]: plot.PNG",
+    '<img src="plot.png">',
+    '<picture><source srcset="plot.webp"></picture>',
+    '<object data="plot.svg"></object>',
+  ]) {
+    assert.equal(executionMayChangeText(parseDocument(source).cells), true, source);
+  }
 });

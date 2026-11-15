@@ -2,6 +2,28 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const vscode = require('vscode');
+const { crc32, deflateSync } = require('node:zlib');
+
+function pixelPng(red, green, blue) {
+  const chunk = (name, data) => {
+    const type = Buffer.from(name);
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([type, data])));
+    return Buffer.concat([size, type, data, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header),
+    chunk('IDAT', deflateSync(Buffer.from([0, red, green, blue]))),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function connect(url) {
@@ -103,7 +125,8 @@ exports.run = async () => {
       console.log('Notebook rendering: supplied document has visible TOC links; no R code cells executed.');
       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
     }
-    for (const [index, extension] of ['rmd', 'Rmd', 'RMD', 'qmd', 'QMD'].entries()) {
+    const extensions = process.env.R_NOTEBOOK_RENDER_IMAGES_ONLY ? [] : ['rmd', 'Rmd', 'RMD', 'qmd', 'QMD'];
+    for (const [index, extension] of extensions.entries()) {
       const filename = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, `rendering-${index}.${extension}`);
       const source = require('./nativeFixtures.cjs').fixtureSource(extension);
       // The target must be outside the initially visible cells, exercising host navigation.
@@ -161,6 +184,39 @@ exports.run = async () => {
       await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
       await reopen;
       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    }
+    for (const extension of ['Rmd', 'qmd']) {
+      const workspace = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      const imageName = `generated plot-${extension}.PNG`;
+      const imagePath = path.join(workspace, imageName);
+      const filename = path.join(workspace, `image-refresh.${extension}`);
+      const initial = pixelPng(255, 0, 0);
+      const generated = pixelPng(0, 0, 255);
+      await fs.writeFile(imagePath, initial);
+      await fs.writeFile(filename, [
+        '---', 'title: Image refresh', '---', '', `![Latest plot](${encodeURI(imageName)})`, '',
+        '```{r}', `writeBin(as.raw(c(${[...generated].join(',')})), ${JSON.stringify(imageName)})`, '```', '',
+      ].join('\n'));
+      const notebook = await vscode.workspace.openNotebookDocument(vscode.Uri.file(filename));
+      currentMarkupId = encodeURIComponent(notebook.cellAt(0).metadata.rNotebookMarkdown.id);
+      await vscode.window.showNotebookDocument(notebook, { preview: false });
+      const displays = async (image) => (await inspect(`
+        return all('.r-notebook-markdown-cell img').some(img =>
+          img.src.endsWith(${JSON.stringify(image.toString('base64'))}) && img.complete && img.naturalWidth > 0);
+      `)).some(Boolean);
+      await until(() => displays(initial), `${extension}: initial PNG was not embedded`);
+      await vscode.commands.executeCommand('notebook.cell.execute', {
+        ranges: [{ start: 1, end: 2 }], document: notebook.uri,
+      });
+      await until(() => typeof notebook.cellAt(1).executionSummary?.success === 'boolean',
+        `${extension}: image generation cell did not finish`);
+      assert.equal(notebook.cellAt(1).executionSummary.success, true);
+      await until(() => displays(generated), `${extension}: execution left the old embedded PNG visible`);
+      // No notebook edit or execution: the watcher must invalidate the cache.
+      await fs.writeFile(imagePath, initial);
+      await until(() => displays(initial), `${extension}: an external PNG change left the cache stale`);
+      console.log(`Notebook rendering: ${extension} generated and externally changed PNGs refresh visibly.`);
+      await vscode.commands.executeCommand('r-notebook.closeSessionAndNotebook');
     }
   } finally {
     for (const connection of connections.values()) connection.close();

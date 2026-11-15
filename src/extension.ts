@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency } from "./Notebook/renderDependencies";
+import { isTextRenderDependency, sourceReferencesDependency, quartoProjectReferencesDependency, TEXT_RENDER_DEPENDENCY_GLOB } from "./Notebook/renderDependencies";
 import { changedMarkupRequiresRefresh } from "./Notebook/markdownRefresh";
 import {
   NOTEBOOK_TYPE,
@@ -26,6 +26,7 @@ import {
 } from "./Notebook/state";
 import { TextRenderCancelledError } from "./Runtime/bridge";
 import { RConsoleTransport } from "./Runtime/console";
+import { shutdownNotebookRuntime } from "./Runtime/shutdown";
 import {
   isQuartoNotebook,
   normalizeNotebookExtension,
@@ -223,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "**/*.{yml,yaml}"
   );
   const renderDependencyWatcher = vscode.workspace.createFileSystemWatcher(
-    "**/*.{bib,csl,css,scss,md,markdown,[qQrR][mM][dD],html,htm,js,svg,lua,py}"
+    TEXT_RENDER_DEPENDENCY_GLOB
   );
   const cellOptionsEditor = new CellOptionsEditor(
     cellOptionsMessaging,
@@ -759,9 +760,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
-  await notebookController?.dispose();
-  await languageService?.stop();
-  while (stateSaves.size > 0) {
-    await Promise.all(stateSaves.values());
-  }
+  await shutdownNotebookRuntime([
+    () => notebookController?.dispose(),
+    () => languageService?.stop(),
+  ], stateSaves);
 }

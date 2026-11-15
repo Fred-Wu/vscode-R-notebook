@@ -6,7 +6,7 @@ import type {
 import { splitFrontMatter, yamlFrontMatterHtml } from "../markdown";
 
 import { scopeNativeCss, decodeEmbeddedCss } from "./nativeCss";
-import { annotateReferenceLinks, nativeDocumentHeader } from "./documentHeader";
+import { annotateReferenceLinks, attachDocumentFootnotes, nativeDocumentHeader } from "./documentHeader";
 import { isCurrentTextResponse, shouldDisplayRenderingError, clearRenderingErrors, shouldReloadHeadScripts, isAllowedNativeScriptSource, isAllowedNativeStylesheetSource } from "./textResult";
 
 interface MarkdownEnvironment {
@@ -208,6 +208,7 @@ async function applyResponse(response: RenderResponse): Promise<void> {
 
   clearRenderingErrors(displayedRenderingErrors, response.documentId ?? "");
   const nativeDocument = new DOMParser().parseFromString(response.html, "text/html");
+  attachDocumentFootnotes(nativeDocument);
   const nativeCell = nativeDocument.getElementById(response.marker);
   if (!nativeCell) {
     placeholder.title = "The native text output did not contain this Markdown cell.";

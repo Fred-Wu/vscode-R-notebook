@@ -33,17 +33,34 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   let executeBridge = async (_source: string, _token: vscode.CancellationToken) => {};
   let configuration = async () => true;
   let selectAttachment = async () => {};
+  const metadataUpdates: unknown[] = [];
+  let textRenders = 0;
+  type Edit = { edits: Array<{ notebookMetadata?: object } | undefined> };
+  let applyEdit = async (_edit: Edit) => true;
   const api = {
     NotebookCellKind: { Markup: 1, Code: 2 },
     CancellationTokenSource: Cancellation,
     EventEmitter: class {
-      event = () => ({ dispose() {} });
-      fire() {}
-      dispose() {}
+      private readonly listeners = new Set<(value: unknown) => void>();
+      event = (listener: (value: unknown) => void) => {
+        this.listeners.add(listener);
+        return { dispose: () => { this.listeners.delete(listener); } };
+      };
+      fire(value: unknown) { this.listeners.forEach((listener) => listener(value)); }
+      dispose() { this.listeners.clear(); }
     },
-    WorkspaceEdit: class { set() {} },
-    NotebookEdit: { updateCellMetadata() {}, updateNotebookMetadata() {} },
-    workspace: { isTrusted: true, applyEdit: async () => true,
+    WorkspaceEdit: class {
+      edits: Edit["edits"] = [];
+      set(_uri: unknown, edits: Edit["edits"]) { this.edits = edits; }
+    },
+    NotebookEdit: {
+      updateCellMetadata() {},
+      updateNotebookMetadata(metadata: object) {
+        metadataUpdates.push(metadata);
+        return { notebookMetadata: metadata };
+      },
+    },
+    workspace: { isTrusted: true, applyEdit: (edit: Edit) => applyEdit(edit),
       getConfiguration: () => ({ get: () => 0 }) },
     window: { setStatusBarMessage() {} },
     notebooks: {
@@ -76,7 +93,9 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
           await executeBridge(source, token);
           return { success: !token.isCancellationRequested, outputs: [] };
         }
-        async renderText() { return "<div>Rendered</div>"; }
+        async renderText() {
+          return `<div id="r-notebook-markdown-text">Render ${++textRenders}</div>`;
+        }
       },
     },
     "../Runtime/launch": {
@@ -229,5 +248,76 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     await assert.rejects(rendering, TextRenderCancelledError);
     assert.equal(c.hasSession(document.uri), false);
     await assert.rejects(c.renderText(document, "text"), /session has closed/);
+  });
+
+  for (const hasImage of [false, true]) {
+    await t.test(`execution invalidates embedded image previews without rerendering static text (image=${hasImage})`, async () => {
+      const c = controller();
+      const document = notebook("code");
+      const code = document.getCells()[0]!;
+      const markup = notebook("markup").getCells()[0]!;
+      const cells = [code, { ...markup, notebook: document, index: 1,
+        document: { ...markup.document, getText: () => hasImage
+          ? "---\ntitle: Report\n---\n![Latest plot](plot.png)"
+          : "---\ntitle: Report\n---\nStatic text." } }];
+      Object.assign(document, {
+        getCells: () => cells,
+      });
+      applyEdit = async (edit) => {
+        for (const change of edit.edits) {
+          if (change?.notebookMetadata) {
+            // Match ExtHostNotebookDocument.acceptDocumentPropertiesChanged:
+            // omitting a metadata key does not delete the extension host value.
+            Object.assign(document, { metadata: { ...document.metadata, ...change.notebookMetadata } });
+          }
+        }
+        return true;
+      };
+      const refreshed: unknown[] = [];
+      c.onDidChangeMarkdownState((value) => refreshed.push(value));
+      executeBridge = async () => {};
+      try {
+        const original = await c.renderText(document, "text");
+        const previousRenders = textRenders;
+        metadataUpdates.length = 0;
+        await execute([code]);
+        assert.deepEqual(refreshed, hasImage ? [document] : []);
+        assert.deepEqual(metadataUpdates, hasImage ? [{ rNotebookTextCache: null }] : []);
+        const next = await c.renderText(document, "text");
+        assert.equal(textRenders, previousRenders + (hasImage ? 1 : 0));
+        assert.equal(next.html === original.html, !hasImage);
+        // Watcher invalidation must also clear a cache when source is unchanged.
+        await c.refreshMarkdown(document);
+        const changedResource = await c.renderText(document, "text");
+        assert.notEqual(changedResource.html, next.html);
+      } finally {
+        applyEdit = async () => true;
+        await c.dispose();
+      }
+    });
+  }
+
+  await t.test("one failed process shutdown does not finish disposal before other processes exit", async () => {
+    const c = controller();
+    const first = notebook("code");
+    await c.selectNotebook(first);
+    const failed = processes.at(-1)!;
+    const second = notebook("code");
+    Object.assign(second, { uri: { scheme: "file", fsPath: "/second.qmd", toString: () => "file:///second.qmd" } });
+    await c.selectNotebook(second);
+    const pending = deferred<void>();
+    const failure = new Error("Could not terminate R");
+    failed.dispose = async () => { throw failure; };
+    processes.at(-1)!.dispose = () => pending.promise;
+    let settled = false;
+    const stopped = assert.rejects(c.dispose(), (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [failure]);
+      return true;
+    }).then(() => { settled = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    pending.resolve();
+    await stopped;
   });
 });

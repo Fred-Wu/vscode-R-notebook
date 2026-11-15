@@ -994,7 +994,10 @@ r_notebook_render_rmarkdown_html <- function(
   ), collapse = "\n")
 }
 
-r_notebook_inline_markdown <- function(markup, evaluation_env) {
+r_notebook_mask_literal_markdown <- function(
+  markup,
+  token_prefix = "VSC_R_NOTEBOOK_FENCED_LINE_"
+) {
   # knitr's inline parser is deliberately independent of Pandoc. Mask complete
   # literal fenced code blocks so examples of `r expressions` are not run.
   masked <- markup
@@ -1074,7 +1077,7 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
     paragraph_open <- !is_fence && base::nzchar(base::trimws(line)) &&
       !base::grepl("^ {0,3}(?:#{1,6}[ \t]|[-*_]{3,}[ \t]*$)", line, perl = TRUE)
     if (!is_fence) next
-    token <- base::paste0("VSC_R_NOTEBOOK_FENCED_LINE_", index, "_")
+    token <- base::paste0(token_prefix, index, "_")
     while (base::any(base::grepl(token, markup, fixed = TRUE))) {
       token <- base::paste0(token, "X")
     }
@@ -1082,14 +1085,10 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
     originals[[token]] <- markup[[index]]
   }
 
-  parsed <- utils::getFromNamespace("parse_inline", "knitr")(
-    masked,
-    utils::getFromNamespace("all_patterns", "knitr")$md
-  )
-  result <- utils::getFromNamespace("inline_exec", "knitr")(
-    parsed,
-    envir = evaluation_env
-  )
+  list(markup = masked, originals = originals)
+}
+
+r_notebook_restore_literal_markdown <- function(result, originals) {
   for (token in base::names(originals)) {
     position <- base::regexpr(token, result, fixed = TRUE)[[1L]]
     if (position > 0L) {
@@ -1105,6 +1104,19 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
     }
   }
   result
+}
+
+r_notebook_inline_markdown <- function(markup, evaluation_env) {
+  protected <- r_notebook_mask_literal_markdown(markup)
+  parsed <- utils::getFromNamespace("parse_inline", "knitr")(
+    protected$markup,
+    utils::getFromNamespace("all_patterns", "knitr")$md
+  )
+  result <- utils::getFromNamespace("inline_exec", "knitr")(
+    parsed,
+    envir = evaluation_env
+  )
+  r_notebook_restore_literal_markdown(result, protected$originals)
 }
 
 r_notebook_finish_request <- function(output_dir, success, request_name) {
@@ -1188,6 +1200,7 @@ r_notebook_render_text <- function(
       warn = FALSE,
       encoding = "UTF-8"
     ), collapse = "\n")
+    literal_lines <- list()
     for (cell in cells) {
       rendered <- if (base::identical(extension, "qmd")) {
         r_notebook_inline_markdown(
@@ -1195,7 +1208,14 @@ r_notebook_render_text <- function(
           evaluation_env
         )
       } else {
-        cell$source
+        # Keep knitr's normal R Markdown evaluation (including YAML/params),
+        # but never expose literal examples to its inline or chunk parser.
+        protected <- r_notebook_mask_literal_markdown(
+          base::strsplit(cell$source, "\n", fixed = TRUE)[[1L]],
+          token_prefix = base::paste0(cell$token, "_LITERAL_")
+        )
+        literal_lines <- c(literal_lines, protected$originals)
+        base::paste(protected$markup, collapse = "\n")
       }
       parts <- base::strsplit(document, cell$token, fixed = TRUE)[[1L]]
       if (base::length(parts) != 2L) {
@@ -1225,6 +1245,9 @@ r_notebook_render_text <- function(
           "render",
           base::shQuote(base::basename(native_document_path)),
           "--to", "html",
+          # Inline R has already been evaluated above. Literal R chunk examples
+          # must not make Quarto select knitr and evaluate the document again.
+          "--metadata", "engine:markdown",
           "--metadata", "from:markdown-blank_before_header",
           "--no-execute",
           "--quiet",
@@ -1261,6 +1284,21 @@ r_notebook_render_text <- function(
     } else {
       html_format <- r_notebook_rmarkdown_html_format(native_document_path, document_outline = TRUE)
       html_format$pandoc$args <- c(html_format$pandoc$args, "--lua-filter", toc_filter)
+      if (base::length(literal_lines) > 0L) {
+        native_pre_processor <- html_format$pre_processor
+        html_format$pre_processor <- function(metadata, input_file, ...) {
+          # This receives the knitted Markdown, immediately before Pandoc. Restore
+          # examples here so they are rendered verbatim and cannot be evaluated.
+          knitted <- base::paste(base::readLines(
+            input_file, warn = FALSE, encoding = "UTF-8"
+          ), collapse = "\n")
+          base::writeLines(
+            r_notebook_restore_literal_markdown(knitted, literal_lines),
+            input_file, useBytes = TRUE
+          )
+          native_pre_processor(metadata, input_file, ...)
+        }
+      }
       rendered_path <- rmarkdown::render(
         input = native_document_path,
         output_format = html_format,
