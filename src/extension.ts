@@ -290,6 +290,7 @@ export function activate(context: vscode.ExtensionContext): void {
         outputCollapsed: true,
         rNotebookMarkdown: true,
         rNotebookOutputSourceHash: true,
+        rNotebookOutputCodeHash: true,
       },
       transientDocumentMetadata: {
         rNotebook: true,

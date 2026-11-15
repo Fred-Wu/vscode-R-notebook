@@ -110,6 +110,8 @@ exports.run = async () => {
     assert.fail(description);
   }
   try {
+    await require('./cellOptions.cjs').run({ until, inspect });
+    if (process.env.R_NOTEBOOK_RENDER_OPTIONS_ONLY) return;
     if (process.env.R_NOTEBOOK_RENDER_FIXTURE) {
       // Copy only the document. Rendering text must not run its R code cells.
       const filename = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath,

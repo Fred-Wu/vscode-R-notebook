@@ -1,12 +1,10 @@
 import * as vscode from "vscode";
 import {
   NOTEBOOK_TYPE,
-  codeCellSource,
   type RNotebookCellMetadata,
-  type RNotebookDocumentMetadata,
 } from "./document";
 import { cellOptionsRequestId, rMarkdownStatusHeader } from "./options";
-import { notebookSourceHash } from "./state";
+import { outputCodeHash } from "./state";
 
 export class RMarkdownCellStatusBarProvider implements
   vscode.NotebookCellStatusBarItemProvider, vscode.Disposable {
@@ -24,16 +22,9 @@ export class RMarkdownCellStatusBarProvider implements
     }
     const metadata = cell.metadata as RNotebookCellMetadata;
     const items: vscode.NotebookCellStatusBarItem[] = [];
-    const outputSourceHash = metadata.rNotebookOutputSourceHash;
-    const eol = (cell.notebook.metadata as RNotebookDocumentMetadata)
-      .rNotebook?.eol ?? "\n";
-    const outputIsStale = outputSourceHash !== undefined &&
-      outputSourceHash !== notebookSourceHash(codeCellSource({
-        kind: "code",
-        value: cell.document.getText(),
-        languageId: cell.document.languageId,
-        chunk: metadata.rNotebook,
-      }, eol));
+    const codeHash = metadata.rNotebookOutputCodeHash;
+    const outputIsStale = codeHash !== undefined &&
+      codeHash !== outputCodeHash(cell.document.getText());
     if (
       outputIsStale &&
       cell.outputs.some((output) => !cellOptionsRequestId(output.metadata))

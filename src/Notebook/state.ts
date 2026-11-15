@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fsPromises from "node:fs/promises";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { codeCellSource, parseDocument } from "./document";
-import { codeCellLabel } from "./options";
+import { codeCellLabel, updateQuartoOptionLines } from "./options";
 
 interface StoredOutputItem {
   mime: string;
@@ -18,6 +18,7 @@ export interface StoredCellOutput {
   cell: number;
   outputs: StoredOutput[];
   sourceHash: string;
+  codeHash?: string;
   executionSummary?: {
     executionOrder?: number;
     success?: boolean;
@@ -77,6 +78,9 @@ function isNotebookState(value: unknown): value is NotebookState {
     ) {
       return false;
     }
+    if (cellOutput.codeHash !== undefined && (
+      typeof cellOutput.codeHash !== "string" || !/^[a-f0-9]{64}$/.test(cellOutput.codeHash)
+    )) return false;
     const summary = cellOutput.executionSummary;
     if (summary !== undefined) {
       if (!isRecord(summary)) {
@@ -111,6 +115,14 @@ function isNotebookState(value: unknown): value is NotebookState {
 
 export function notebookSourceHash(source: string): string {
   return createHash("sha256").update(source).digest("hex");
+}
+
+// Displayed results belong to the code that produced them. Chunk options are
+// for the next execution/render and do not invalidate an existing result.
+export function outputCodeHash(source: string): string {
+  const code = updateQuartoOptionLines(source, "")
+    .replace(/\r\n?/g, "\n").replace(/\n?$/, "\n");
+  return notebookSourceHash(code);
 }
 
 export function storedCells(source: string): StoredCell[] {
