@@ -175,3 +175,24 @@ test("only execution-dependent Markdown invalidates the text render", () => {
     assert.equal(executionMayChangeText(parseDocument(source).cells), true, source);
   }
 });
+
+test("YAML expressions in document front matter invalidate previews after execution", () => {
+  for (const yaml of [
+    "output:\n  html_document:\n    toc: !expr notebook_toc",
+    "output: {html_document: {number_sections: !expr numbered}}",
+    "output:\n  html_document:\n    toc: !expr >-\n      get0('notebook_toc', ifnotfound = FALSE)",
+  ]) {
+    for (const eol of ["\n", "\r\n"]) {
+      const source = `---\n${yaml}\n---\n# Heading\n`.replaceAll("\n", eol);
+      assert.equal(executionMayChangeText(parseDocument(source).cells), true, source);
+    }
+  }
+  for (const source of [
+    "---\ntitle: Static report\noutput: html_document\n---\n# Heading\n",
+    "Use the !expr YAML tag to evaluate an expression.\n",
+    "---\ntitle: Static report\n---\n```yaml\ntoc: !expr notebook_toc\n```\n",
+    "```{r}\nnotebook_toc <- TRUE\n```\n---\ntoc: !expr notebook_toc\n---\n",
+  ]) {
+    assert.equal(executionMayChangeText(parseDocument(source).cells), false, source);
+  }
+});

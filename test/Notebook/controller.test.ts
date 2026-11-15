@@ -404,16 +404,22 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     await assert.rejects(c.renderText(document, "text"), /session has closed/);
   });
 
-  for (const hasImage of [false, true]) {
-    await t.test(`execution invalidates embedded image previews without rerendering static text (image=${hasImage})`, async () => {
+  for (const { name, source, invalidates } of [
+    { name: "static text", source: "---\ntitle: Report\n---\nStatic text.", invalidates: false },
+    { name: "embedded image", source: "---\ntitle: Report\n---\n![Latest plot](plot.png)", invalidates: true },
+    { name: "YAML expression", source: "---\noutput:\n  html_document:\n    toc: !expr get0('notebook_toc', ifnotfound = FALSE)\n---\n# Heading", invalidates: true },
+  ]) {
+    await t.test(`execution refreshes dependent previews and preserves static caches (${name})`, async () => {
       const c = controller();
       const document = notebook("code");
+      if (name === "YAML expression") {
+        Object.assign(document, { uri: { scheme: "file", fsPath: "/outline.Rmd", toString: () => "file:///outline.Rmd" } });
+      }
       const code = document.getCells()[0]!;
       const markup = notebook("markup").getCells()[0]!;
-      const cells = [code, { ...markup, notebook: document, index: 1,
-        document: { ...markup.document, getText: () => hasImage
-          ? "---\ntitle: Report\n---\n![Latest plot](plot.png)"
-          : "---\ntitle: Report\n---\nStatic text." } }];
+      const cells = [{ ...markup, notebook: document, index: 0,
+        document: { ...markup.document, getText: () => source } },
+        Object.assign(code, { index: 1 })];
       Object.assign(document, {
         getCells: () => cells,
       });
@@ -435,11 +441,11 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
         const previousRenders = textRenders;
         metadataUpdates.length = 0;
         await execute([code]);
-        assert.deepEqual(refreshed, hasImage ? [document] : []);
-        assert.deepEqual(metadataUpdates, hasImage ? [{ rNotebookTextCache: null }] : []);
+        assert.deepEqual(refreshed, invalidates ? [document] : []);
+        assert.deepEqual(metadataUpdates, invalidates ? [{ rNotebookTextCache: null }] : []);
         const next = await c.renderText(document, "text");
-        assert.equal(textRenders, previousRenders + (hasImage ? 1 : 0));
-        assert.equal(next.html === original.html, !hasImage);
+        assert.equal(textRenders, previousRenders + (invalidates ? 1 : 0));
+        assert.equal(next.html === original.html, !invalidates);
         // Watcher invalidation must also clear a cache when source is unchanged.
         await c.refreshMarkdown(document);
         const changedResource = await c.renderText(document, "text");
