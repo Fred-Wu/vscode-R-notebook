@@ -91,23 +91,24 @@ function notebookForCommand(candidate?: unknown): vscode.NotebookDocument | unde
 export function activate(context: vscode.ExtensionContext): void {
   const serializer = new RNotebookSerializer();
   const output = vscode.window.createOutputChannel("R Notebook Kernel");
-  const closedNotebookStates = new Map<string, NotebookState>();
+  const closedNotebookStates = new Map<string, Promise<NotebookState>>();
   const notebookPreparations = new Map<string, Promise<void>>();
   const prepareNotebook = (
     notebook: vscode.NotebookDocument,
     restoreSidecar = false,
-    retainedState?: NotebookState
+    retainedState?: Promise<NotebookState>
   ): Promise<void> => {
     const key = notebook.uri.toString();
-    const task = (notebookPreparations.get(key) ?? Promise.resolve())
-      .then(() => restoreSidecar && !retainedState
-        ? stateSaves.get(key)
-        : undefined)
-      .then(() => serializer.prepareNotebook(
-        notebook,
-        restoreSidecar,
-        retainedState
-      ))
+    // Capture the preceding save now. A later close can queue a save that
+    // depends on this restoration, so looking it up later would form a cycle.
+    const saved = restoreSidecar && !retainedState ? stateSaves.get(key) : undefined;
+    const ready = (notebookPreparations.get(key) ?? Promise.resolve()).then(() => saved);
+    const task = serializer.prepareNotebook(
+      notebook,
+      restoreSidecar,
+      retainedState,
+      ready
+    )
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[Notebook] Could not prepare notebook state: ${message}`);
@@ -449,7 +450,11 @@ export function activate(context: vscode.ExtensionContext): void {
         hasOpenSourceEditor(key) ||
         controller.hasSession(notebook.uri)
       ) {
-        closedNotebookStates.set(key, snapshot.state);
+        const retained = snapshot.then(({ state }) => state);
+        void retained.catch((error: unknown) => output.appendLine(
+          `[Notebook] Could not retain notebook state: ${String(error)}`
+        ));
+        closedNotebookStates.set(key, retained);
       } else {
         closedNotebookStates.delete(key);
       }

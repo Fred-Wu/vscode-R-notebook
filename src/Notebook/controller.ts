@@ -90,6 +90,7 @@ export class RNotebookController implements vscode.Disposable {
   readonly onDidShutdownSession = this.sessionShutdown.event;
   private readonly markdownInputSignatures = new Map<string, string>();
   private selectedNotebookKey: string | undefined;
+  private selection = 0;
   private executionOrder = 0;
   private disposed = false;
   private readonly stopping = new Set<Promise<void>>();
@@ -208,6 +209,7 @@ export class RNotebookController implements vscode.Disposable {
 
   notebookTabClosed(notebookUri: vscode.Uri): void {
     const key = notebookUri.toString();
+    if (this.selectedNotebookKey === key) this.selection++;
     this.markdownInputSignatures.delete(key);
     const session = this.sessions.get(key);
     if (!session || session.stopped) {
@@ -283,6 +285,7 @@ export class RNotebookController implements vscode.Disposable {
   async selectNotebook(
     notebook: vscode.NotebookDocument | undefined
   ): Promise<void> {
+    const selection = ++this.selection;
     if (
       notebook?.notebookType !== NOTEBOOK_TYPE ||
       notebook.uri.scheme !== "file" ||
@@ -299,6 +302,7 @@ export class RNotebookController implements vscode.Disposable {
       this.markSessionOpen(existingSession);
     }
     await this.attachment.select(existingSession?.process);
+    if (selection !== this.selection || this.disposed || notebook.isClosed) return;
     await this.startR(notebook, true);
   }
 
@@ -612,6 +616,7 @@ export class RNotebookController implements vscode.Disposable {
 
   shutdownSession(notebookUri: vscode.Uri): Promise<void> {
     const key = notebookUri.toString();
+    if (this.selectedNotebookKey === key) this.selection++;
     const session = this.sessions.get(key);
     if (!session) {
       return Promise.resolve();

@@ -32,6 +32,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   let execute!: (cells: readonly vscode.NotebookCell[]) => Promise<void>;
   let executeBridge = async (_source: string, _token: vscode.CancellationToken) => {};
   let configuration = async () => true;
+  let selectAttachment = async () => {};
   const api = {
     NotebookCellKind: { Markup: 1, Code: 2 },
     CancellationTokenSource: Cancellation,
@@ -42,7 +43,8 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     },
     WorkspaceEdit: class { set() {} },
     NotebookEdit: { updateCellMetadata() {}, updateNotebookMetadata() {} },
-    workspace: { isTrusted: true, applyEdit: async () => true },
+    workspace: { isTrusted: true, applyEdit: async () => true,
+      getConfiguration: () => ({ get: () => 0 }) },
     window: { setStatusBarMessage() {} },
     notebooks: {
       createNotebookController: () => ({
@@ -91,6 +93,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     },
     "../Runtime/sess": {
       InlineSessCoordinator: class {
+        select() { return selectAttachment(); }
         beginExecution() {}
         async endExecution() {}
         forget() {}
@@ -123,6 +126,50 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     return Object.assign(document, { getCells: () => cells }) as unknown as vscode.NotebookDocument;
   };
   const controller = () => new Controller("helper.R", { appendLine() {} } as unknown as vscode.OutputChannel, false);
+
+  for (const action of ["shutdown", "close tab", "change selection", "dispose"] as const) {
+    await t.test(`pending selection cannot undo ${action}`, async () => {
+      const c = controller();
+      const document = notebook("code");
+      await c.selectNotebook(document);
+      const count = processes.length;
+      const selected = deferred<void>();
+      selectAttachment = () => selected.promise;
+      const pending = c.selectNotebook(document);
+      selectAttachment = async () => {};
+      try {
+        if (action === "shutdown") await c.shutdownSession(document.uri);
+        else if (action === "close tab") c.notebookTabClosed(document.uri);
+        else if (action === "change selection") await c.selectNotebook(undefined);
+        else await c.dispose();
+        selected.resolve();
+        await pending;
+        assert.equal(processes.length, count, "A stale selection recreated the session");
+        assert.equal(processes.at(-1)!.starts, 1, "A stale selection restarted R");
+        if (action === "close tab") assert.equal(c.retainedNotebookSessions().length, 1);
+        if (action === "shutdown") {
+          assert.equal(c.hasSession(document.uri), false);
+          await c.selectNotebook(document);
+          assert.equal(processes.length, count + 1, "A fresh selection should start R");
+        }
+      } finally { selected.resolve(); await c.dispose(); }
+    });
+  }
+
+  await t.test("shutdown invalidates selection before its first session exists", async () => {
+    const c = controller();
+    const document = notebook("code");
+    const selected = deferred<void>();
+    const count = processes.length;
+    selectAttachment = () => selected.promise;
+    const pending = c.selectNotebook(document);
+    selectAttachment = async () => {};
+    await c.shutdownSession(document.uri);
+    selected.resolve();
+    await pending;
+    assert.equal(processes.length, count);
+    await c.dispose();
+  });
 
   await t.test("Stop All cancels running and queued cells without poisoning subsequent execution", async () => {
     executions.length = 0;

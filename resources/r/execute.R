@@ -1001,11 +1001,10 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
   originals <- list()
   active_marker <- ""
   active_length <- 0L
-  active_quote_depth <- 0L
-  active_indent <- 0L
+  # Containers are ordered: list indentation and quote prefixes can alternate.
+  # A zero denotes a quote; positive widths denote list-item indentation.
+  containers <- integer()
   paragraph_open <- FALSE
-  previous_quote_depth <- 0L
-  list_indents <- integer()
   if (base::length(markup) > 0L) for (index in base::seq_along(markup)) {
     line <- markup[[index]]
     # Measure container indentation in columns while preserving original text.
@@ -1015,65 +1014,50 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
         base::strrep(" ", 4L - (tab - 1L) %% 4L), base::substring(line, tab + 1L))
       tab <- base::regexpr("\t", line, fixed = TRUE)[[1L]]
     }
-    # Quote and list containers do not turn their fenced examples into prose.
-    quote_lines <- line
-    while (base::grepl("^ {0,3}>[ \t]?", line, perl = TRUE)) {
-      line <- base::sub("^ {0,3}>[ \t]?", "", line, perl = TRUE)
-      quote_lines <- c(quote_lines, line)
-    }
-    quote_depth <- base::length(quote_lines) - 1L
-    if (base::nzchar(active_marker)) {
-      if (quote_depth < active_quote_depth) {
-        active_marker <- ""
+    matched <- 0L
+    for (container in containers) {
+      if (container == 0L) {
+        if (!base::grepl("^ {0,3}>[ \t]?", line, perl = TRUE)) break
+        line <- base::sub("^ {0,3}>[ \t]?", "", line, perl = TRUE)
+      } else if (!base::nzchar(base::trimws(line))) {
+        line <- ""
       } else {
-        line <- quote_lines[[active_quote_depth + 1L]]
-        if (active_indent > 0L && base::nzchar(base::trimws(line)) &&
-            !base::grepl(base::paste0("^ {", active_indent, "}"), line)) {
-          active_marker <- ""
-        }
+        if (!base::startsWith(line, base::strrep(" ", container))) break
+        line <- base::substring(line, container + 1L)
       }
+      matched <- matched + 1L
     }
-    if (!base::nzchar(active_marker)) {
-      line <- quote_lines[[quote_depth + 1L]]
-    }
-    if (quote_depth != previous_quote_depth) {
+    if (matched < base::length(containers)) {
+      containers <- containers[base::seq_len(matched)]
+      active_marker <- ""
       paragraph_open <- FALSE
-      list_indents <- integer()
     }
-    previous_quote_depth <- quote_depth
-    opening_line <- line
-    container_indent <- 0L
-    if (!base::nzchar(active_marker)) {
-      # Indentation is relative to the current list item, not the document.
-      # Retain containers over blank lines and pop them when content dedents.
-      indent <- base::attr(base::regexpr("^ *", line), "match.length")
-      if (base::nzchar(base::trimws(line))) {
-        list_indents <- list_indents[list_indents <= indent]
-      }
-      if (base::length(list_indents)) container_indent <- list_indents[[base::length(list_indents)]]
-      opening_line <- base::substring(line, container_indent + 1L)
-      repeat {
-        list_prefix <- base::regmatches(opening_line, base::regexpr(
-          "^ {0,3}(?:[-+*]|[0-9]+[.)]) +", opening_line, perl = TRUE
+    if (!base::nzchar(active_marker)) repeat {
+      quote <- base::regmatches(line, base::regexpr("^ {0,3}>[ \t]?", line, perl = TRUE))
+      if (base::length(quote) && base::nzchar(quote)) {
+        containers <- c(containers, 0L)
+        line <- base::substring(line, base::nchar(quote) + 1L)
+      } else {
+        prefix <- base::regmatches(line, base::regexpr(
+          "^ {0,3}(?:[-+*]|[0-9]+[.)]) +", line, perl = TRUE
         ))
-        if (!base::length(list_prefix) || !base::nzchar(list_prefix)) break
-        padding <- base::attr(base::regexpr(" +$", list_prefix), "match.length")
+        if (!base::length(prefix) || !base::nzchar(prefix)) break
+        padding <- base::attr(base::regexpr(" +$", prefix), "match.length")
         # Five or more spaces after a marker start indented code within the item.
-        if (padding > 4L) list_prefix <- base::substr(list_prefix, 1L, base::nchar(list_prefix) - padding + 1L)
-        container_indent <- container_indent + base::nchar(list_prefix)
-        list_indents <- c(list_indents, container_indent)
-        opening_line <- base::substring(line, container_indent + 1L)
-        paragraph_open <- FALSE
+        width <- base::nchar(prefix) - if (padding > 4L) padding - 1L else 0L
+        containers <- c(containers, width)
+        line <- base::substring(line, width + 1L)
       }
+      paragraph_open <- FALSE
     }
     opening <- base::regmatches(
-      opening_line, base::regexec("^ {0,3}(`{3,}|~{3,})", opening_line, perl = TRUE)
+      line, base::regexec("^ {0,3}(`{3,}|~{3,})", line, perl = TRUE)
     )[[1L]]
     is_fence <- FALSE
     if (base::nzchar(active_marker)) {
       is_fence <- TRUE
       closing <- base::paste0(
-        "^ {0,", active_indent + 3L, "}", active_marker,
+        "^ {0,3}", active_marker,
         "{", active_length, ",}[ \t]*$"
       )
       if (base::grepl(closing, line, perl = TRUE)) {
@@ -1082,15 +1066,13 @@ r_notebook_inline_markdown <- function(markup, evaluation_env) {
     } else if (base::length(opening) >= 2L) {
       active_marker <- base::substr(opening[[2L]], 1L, 1L)
       active_length <- base::nchar(opening[[2L]])
-      active_quote_depth <- quote_depth
-      active_indent <- container_indent
       is_fence <- TRUE
-    } else if (!paragraph_open && base::grepl("^(?: {4}|\\t)", opening_line, perl = TRUE)) {
+    } else if (!paragraph_open && base::grepl("^(?: {4}|\\t)", line, perl = TRUE)) {
       # An indented block cannot interrupt an existing paragraph.
       is_fence <- TRUE
     }
     paragraph_open <- !is_fence && base::nzchar(base::trimws(line)) &&
-      !base::grepl("^ {0,3}(?:#{1,6}[ \t]|[-*_]{3,}[ \t]*$)", opening_line, perl = TRUE)
+      !base::grepl("^ {0,3}(?:#{1,6}[ \t]|[-*_]{3,}[ \t]*$)", line, perl = TRUE)
     if (!is_fence) next
     token <- base::paste0("VSC_R_NOTEBOOK_FENCED_LINE_", index, "_")
     while (base::any(base::grepl(token, markup, fixed = TRUE))) {

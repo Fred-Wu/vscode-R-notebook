@@ -294,6 +294,39 @@ rendered <- r_notebook_inline_markdown(c(
 ), .GlobalEnv)
 stopifnot(grepl("Outside 4.", rendered, fixed = TRUE))
 
+# Lists and block quotes can alternate in either order, at arbitrary depth.
+# Preserve literal examples while still evaluating inline results in each
+# container and after an unclosed fence's container ends.
+for (case in list(
+  list(prefix = c("- Outer", "  - Inner", ""), quote = "    > "),
+  list(prefix = c("123. Item", ""), quote = "     > "),
+  list(prefix = c("> - Outer", ">   - Inner", ">"), quote = ">     > "),
+  list(prefix = c("- > - Inner", "  >"), quote = "  >   > ")
+)) {
+  for (fence in c("```text", "~~~~")) {
+    r_notebook_inline_probe <- 0L
+    literal <- paste0(case$quote, "`r {r_notebook_inline_probe <- 1L; 99}`")
+    source <- c(case$prefix,
+      paste0(case$quote, "Inline result: `r 2 + 2`."), case$quote,
+      paste0(case$quote, fence), literal,
+      paste0(case$quote, if (fence == "```text") "```" else "~~~~"),
+      paste0(case$quote, "After fence: `r 3 + 3`."),
+      "", "Outside `r 4 + 4`."
+    )
+    rendered <- r_notebook_inline_markdown(source, .GlobalEnv)
+    stopifnot(identical(r_notebook_inline_probe, 0L))
+    stopifnot(grepl(literal, rendered, fixed = TRUE))
+    stopifnot(grepl("Inline result: 4.", rendered, fixed = TRUE))
+    stopifnot(grepl("After fence: 6.", rendered, fixed = TRUE))
+    stopifnot(grepl("Outside 8.", rendered, fixed = TRUE))
+  }
+  rendered <- r_notebook_inline_markdown(c(case$prefix,
+    paste0(case$quote, "```"), paste0(case$quote, "`r stop('literal example')`"),
+    "", "Outside `r 2 + 2`."
+  ), .GlobalEnv)
+  stopifnot(grepl("Outside 4.", rendered, fixed = TRUE))
+}
+
 rendered <- r_notebook_inline_markdown(c(
   "- Item", "", "\tValue is `r 1 + 1`.", "", "\t  `r stop('tab-indented code executed')`",
   "", "-     `r stop('code after list marker executed')`", "", "Outside `r 2 + 2`."

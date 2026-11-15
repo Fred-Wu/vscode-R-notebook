@@ -1,6 +1,7 @@
 import {
   execFile,
   spawn,
+  type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { promisify } from "node:util";
@@ -9,7 +10,7 @@ import * as path from "node:path";
 
 const execFileAsync = promisify(execFile);
 
-function terminalExecutable(options: HiddenRLaunchOptions): string {
+export function terminalExecutable(options: Pick<HiddenRLaunchOptions, "executable" | "env">): string {
   if (process.platform !== "win32" || !/^R(?:\.exe)?$/i.test(path.basename(options.executable))) {
     return options.executable;
   }
@@ -92,11 +93,11 @@ function exitError(code: number | null, signal: NodeJS.Signals | null): Error {
   return new Error("The inline R process stopped before the notebook cell finished.");
 }
 
-function isRunning(child: ChildProcessWithoutNullStreams): boolean {
+function isRunning(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
 }
 
-async function terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
+export async function terminateRProcess(child: ChildProcess): Promise<void> {
   if (!isRunning(child) || child.pid === undefined) return;
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   if (process.platform === "win32") {
@@ -110,7 +111,7 @@ async function terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
       if (isRunning(child)) throw error;
     }
   } else {
-    // Inline R owns a process group, including any render subprocesses.
+    // Owned R processes have a process group, including their subprocesses.
     try { process.kill(-child.pid, "SIGKILL"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
@@ -334,7 +335,7 @@ export class HiddenRProcess implements InlineRTransport {
         this.log("Automatic vscode-R attachment request sent.");
       } catch (error) {
         this.clearProcess(child);
-        await terminate(child);
+        await terminateRProcess(child);
         throw error;
       }
     }
@@ -522,7 +523,7 @@ export class HiddenRProcess implements InlineRTransport {
     if (wasRunning) {
       this.runningChanged(false);
     }
-    this.stopping = child ? terminate(child) : Promise.resolve();
+    this.stopping = child ? terminateRProcess(child) : Promise.resolve();
     // VS Code can call dispose without awaiting it. Keep failures observable
     // while still returning the promise to explicit shutdown/deactivation.
     void this.stopping.catch((error: unknown) => this.log(`Could not stop inline R: ${String(error)}`));

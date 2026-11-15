@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as vscode from "vscode";
 import { CloseAction, ErrorAction, LanguageClient, type StreamInfo } from "vscode-languageclient/node";
 import { resolveRExecutable } from "../Runtime/launch";
+import { terminalExecutable, terminateRProcess } from "../Runtime/process";
 import { NOTEBOOK_TYPE, R_CELL_LANGUAGE } from "./document";
 
 // Keep each cell's identity and positions, but prevent languageserver from
@@ -30,6 +31,9 @@ class NotebookLanguageClient {
   private socket?: net.Socket;
   private cancelConnection?: () => void;
   private closed = false;
+  private ready = false;
+  private termination?: Promise<void>;
+  private shutdown?: Promise<void>;
   private readonly starting: Promise<void>;
 
   constructor(
@@ -37,9 +41,8 @@ class NotebookLanguageClient {
     private readonly script: string,
     private readonly output: vscode.OutputChannel
   ) {
-    this.starting = this.start().catch((error: unknown) => {
-      this.process?.kill();
-      this.socket?.destroy();
+    this.starting = this.start().catch(async (error: unknown) => {
+      await this.terminate();
       if (!this.closed) this.output.appendLine(`[${path.basename(notebook.uri.fsPath)}] ${String(error)}`);
     });
   }
@@ -93,6 +96,7 @@ class NotebookLanguageClient {
         },
       });
     await this.client.start();
+    this.ready = true;
     this.output.appendLine(`[${path.basename(uri.fsPath)}] Language server ready.`);
   }
 
@@ -115,7 +119,6 @@ class NotebookLanguageClient {
         clearTimeout(timeout);
         this.cancelConnection = undefined;
         server.close();
-        this.process?.kill();
         reject(error);
       };
       const timeout = setTimeout(() => fail(new Error("R language server startup timed out. See R Notebook Language Server output.")), 60000);
@@ -124,7 +127,10 @@ class NotebookLanguageClient {
       server.listen(0, "127.0.0.1", () => {
         if (this.closed) { this.cancelConnection?.(); return; }
         const address = server.address() as net.AddressInfo;
-        const child = spawn(executable, args, { cwd, env: { ...env, R_NOTEBOOK_LSP_PORT: String(address.port) }, windowsHide: true });
+        const child = spawn(terminalExecutable({ executable, env }), args, {
+          cwd, env: { ...env, R_NOTEBOOK_LSP_PORT: String(address.port) },
+          windowsHide: true, detached: process.platform !== "win32",
+        });
         this.process = child;
         child.stdin.end();
         child.stdout.on("data", data => this.output.append(data.toString()));
@@ -135,15 +141,28 @@ class NotebookLanguageClient {
     });
   }
 
-  async stop(): Promise<void> {
+  private terminate(): Promise<void> {
+    this.socket?.destroy();
+    return this.termination ??= this.process
+      ? terminateRProcess(this.process)
+      : Promise.resolve();
+  }
+
+  stop(): Promise<void> {
+    return this.shutdown ??= this.stopClient();
+  }
+
+  private async stopClient(): Promise<void> {
     this.closed = true;
     this.cancelConnection?.();
+    // A server still initializing cannot answer shutdown. Stop its transport
+    // and process before waiting for LanguageClient.start() to settle.
+    if (!this.ready) await this.terminate();
     await this.starting;
     try {
       if (this.client?.needsStop()) await this.client.stop();
     } finally {
-      this.socket?.destroy();
-      this.process?.kill();
+      await this.terminate();
     }
   }
 }
