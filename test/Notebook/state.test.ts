@@ -7,12 +7,24 @@ import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import {
   notebookSourceHash,
+  outputCodeHash,
   readNotebookStateFile,
   reconcileNotebookState,
   storedCells,
   writeNotebookStateFile,
   type NotebookState,
 } from "../../src/Notebook/state";
+
+test("displayed results track code independently of chunk options", () => {
+  const code = 'plot(1:3)\nprint("#| this is R text")\n';
+  const hash = outputCodeHash(code);
+  assert.equal(outputCodeHash('#| eval: false\n#| fig-width: 10\n#| fig-height: 8\n' + code), hash);
+  assert.equal(outputCodeHash('#| label: renamed\n#| fig-cap: |\n#|   New caption\n' + code), hash);
+  assert.equal(outputCodeHash(code.replace(/\n/g, "\r\n")), hash);
+  assert.equal(outputCodeHash(code.trimEnd()), hash);
+  assert.notEqual(outputCodeHash(code.replace("1:3", "1:4")), hash);
+  assert.notEqual(outputCodeHash(code.replace("this is R text", "edited R text")), hash);
+});
 
 test("writes compressed notebook state to the deterministic sidecar", async (t) => {
   const directory = await fsPromises.mkdtemp(

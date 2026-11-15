@@ -110,7 +110,13 @@ export class CellOptionsEditor implements vscode.Disposable {
       cell.document.languageId
     );
     replacement.metadata = cell.metadata;
-    replacement.outputs = [...outputs];
+    // The replacement is a new cell. Reusing output IDs from the removed cell
+    // can leave VS Code's output containers at zero height. Give each output a
+    // fresh rendering identity while retaining its data and metadata.
+    replacement.outputs = outputs.map((output) => new vscode.NotebookCellOutput(
+      output.items,
+      output.metadata
+    ));
     replacement.executionSummary = cell.executionSummary;
     const edit = new vscode.WorkspaceEdit();
     edit.set(cell.notebook.uri, [

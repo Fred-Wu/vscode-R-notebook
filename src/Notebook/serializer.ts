@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import {
   NOTEBOOK_TYPE,
   R_CELL_LANGUAGE,
+  codeCellSource,
   defaultChunk,
   parseDocument,
   serializeDocument,
@@ -13,6 +14,7 @@ import {
 } from "./document";
 import {
   notebookSourceHash,
+  outputCodeHash,
   readNotebookStateFile,
   reconcileNotebookState,
   storedCells,
@@ -134,9 +136,17 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
         (output) => !cellOptionsRequestId(output.metadata)
       );
       if (stored && !hasLocalOutput) {
+        // Older sidecars only recorded the full chunk hash. Recover a code
+        // baseline when that chunk still matches; otherwise its code is unknown.
+        const currentSourceHash = notebookSourceHash(codeCellSource({
+          kind: "code", value: cell.document.getText(),
+          languageId: cell.document.languageId, chunk: cellMetadata.rNotebook,
+        }, eol));
         cellMetadata = {
           ...cellMetadata,
           rNotebookOutputSourceHash: stored.sourceHash,
+          rNotebookOutputCodeHash: stored.codeHash ?? (stored.sourceHash === currentSourceHash
+            ? outputCodeHash(cell.document.getText()) : undefined),
         };
         const replacement = new vscode.NotebookCellData(
           cell.kind,
@@ -216,6 +226,10 @@ export class RNotebookSerializer implements vscode.NotebookSerializer {
       cellOutputs.push({
         cell: stateCell.index,
         sourceHash: recordedSourceHash ?? stateCell.sourceHash,
+        codeHash: cellMetadata.rNotebookOutputCodeHash ?? (
+          recordedSourceHash === undefined || recordedSourceHash === stateCell.sourceHash
+            ? outputCodeHash(cell.document.getText()) : undefined
+        ),
         outputs: outputs.map((output) => ({
           items: output.items.map((item) => ({
             mime: item.mime,

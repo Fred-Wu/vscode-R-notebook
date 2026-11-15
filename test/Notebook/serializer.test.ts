@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { defaultChunk } from "../../src/Notebook/document";
-import { readNotebookStateFile } from "../../src/Notebook/state";
+import { outputCodeHash, readNotebookStateFile } from "../../src/Notebook/state";
 
 type CommonJsLoad = (
   request: string,
@@ -120,6 +120,37 @@ test("notebook preparation and state snapshots", async (t) => {
       ), [localOutput ? "new result" : "saved-0", "saved-1"]);
     });
   }
+
+  await t.test("saved outputs retain their original code hash after options or code edits", async () => {
+    const { cells, notebook, serializer } = await fixture("code-baseline");
+    const original = outputCodeHash("1 + 1");
+    Object.assign(cells[0]!.metadata, { rNotebookOutputCodeHash: original });
+    cells[0]!.document.getText = () => "#| fig-width: 10\n1 + 2";
+    cells[0]!.outputs = [{ items: [{ mime: "text/plain", data: Buffer.from("2") }] }];
+    await serializer.saveState(serializer.captureState(notebook as never));
+    assert.equal((await readNotebookStateFile(notebook.uri.fsPath))!.cellOutputs[0]!.codeHash, original);
+    cells[0]!.outputs = [];
+    await serializer.prepareNotebook(notebook as never, true);
+    const replacement = appliedEdits[0] as { cells: { metadata: { rNotebookOutputCodeHash: string } }[] };
+    assert.equal(replacement.cells[0]!.metadata.rNotebookOutputCodeHash, original);
+    assert.notEqual(original, outputCodeHash(cells[0]!.document.getText()));
+  });
+
+  await t.test("legacy outputs recover a code baseline only for an unchanged chunk", async () => {
+    const { cells, notebook, serializer } = await fixture("legacy-code-baseline");
+    const state = (await readNotebookStateFile(notebook.uri.fsPath))!;
+    // Parsing the saved document includes the separator after the first fence.
+    cells[0]!.metadata.rNotebook.closingFence = "```\n";
+    state.cellOutputs.forEach(output => { delete output.codeHash; });
+    await serializer.prepareNotebook(notebook as never, true, state);
+    const restoredMetadata = () => (appliedEdits[0] as {
+      cells: { metadata: { rNotebookOutputCodeHash?: string } }[];
+    }).cells[0]!.metadata;
+    assert.equal(restoredMetadata().rNotebookOutputCodeHash, outputCodeHash("1 + 1"));
+    cells[0]!.document.getText = () => "1 + 2";
+    await serializer.prepareNotebook(notebook as never, true, state);
+    assert.equal(restoredMetadata().rNotebookOutputCodeHash, undefined);
+  });
 
   await t.test("completed restoration does not resurrect subsequently cleared outputs", async () => {
     const { notebook, serializer } = await fixture("cleared");

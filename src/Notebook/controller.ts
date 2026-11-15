@@ -14,7 +14,7 @@ import {
   type RNotebookDocumentMetadata,
 } from "./document";
 import { executionMayChangeText, nativeCodeOptionSignature, nativeTextDocument } from "./markdown";
-import { notebookSourceHash } from "./state";
+import { notebookSourceHash, outputCodeHash } from "./state";
 import {
   RExecutionBridge,
   TextRenderCancelledError,
@@ -747,6 +747,7 @@ export class RNotebookController implements vscode.Disposable {
         vscode.NotebookEdit.updateCellMetadata(cell.index, {
           ...metadata,
           rNotebookOutputSourceHash: notebookSourceHash(chunkSource),
+          rNotebookOutputCodeHash: outputCodeHash(cell.document.getText()),
         }),
       ]);
       if (!await vscode.workspace.applyEdit(edit)) {

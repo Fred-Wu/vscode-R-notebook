@@ -29,6 +29,7 @@ export interface RNotebookCellMetadata {
   rNotebook?: ChunkMetadata;
   rNotebookMarkdown?: { id: string };
   rNotebookOutputSourceHash?: string;
+  rNotebookOutputCodeHash?: string;
 }
 
 export interface RNotebookDocumentMetadata {
