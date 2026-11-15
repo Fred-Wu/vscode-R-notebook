@@ -91,9 +91,10 @@ async function launchOptions(
     throw new Error("vscode-R is required to start the inline notebook R session.");
   }
   const fileWorkspace = vscode.workspace.getWorkspaceFolder(notebookUri);
-  const startupDirectory = fileWorkspace
-    ? path.dirname(notebookUri.fsPath)
-    : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+  // R discovers project .Rprofile/.Renviron files only in its startup directory.
+  // The execution bridge separately uses the notebook directory for cell work.
+  const startupDirectory = fileWorkspace?.uri.fsPath
+    ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 
   delete env.VSCODE_INIT_R;
   delete env.VSCODE_WATCHER_DIR;
