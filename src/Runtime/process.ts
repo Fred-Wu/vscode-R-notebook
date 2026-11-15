@@ -6,6 +6,7 @@ import {
 } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { CancellationToken } from "vscode";
 import { RStartupCancelledError, waitForRStartup } from "./startup";
@@ -181,7 +182,9 @@ export class HiddenRProcess implements InlineRTransport {
       let output = "";
       let settled = false;
       const timeout = setTimeout(() => finish(undefined,
-        new Error("vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent.")), 300000);
+        new Error(initialization.attachmentId
+          ? "vscode-R sess attachment timed out; check the R Notebook and vscode-R outputs for installation consent."
+          : "Inline R startup timed out; check the R startup profile and R Notebook output.")), 300000);
 
       const stopListening = (): void => {
         clearTimeout(timeout);
@@ -201,7 +204,7 @@ export class HiddenRProcess implements InlineRTransport {
         } else if (processId !== undefined) {
           resolve(processId);
         } else {
-          reject(new Error("vscode-R attachment did not report the R process ID."));
+          reject(new Error("Inline R initialization did not report the R process ID."));
         }
       };
       const onData = (data: Buffer): void => {
@@ -221,14 +224,14 @@ export class HiddenRProcess implements InlineRTransport {
             } else {
               finish(
                 undefined,
-                new Error("vscode-R attachment reported an invalid R process ID.")
+                new Error("Inline R initialization reported an invalid R process ID.")
               );
             }
             return;
           }
           if (line.startsWith(initialization.failureMarker)) {
             const message = line.slice(initialization.failureMarker.length).trim();
-            finish(undefined, new Error(message || "vscode-R session attachment failed."));
+            finish(undefined, new Error(message || "Inline R initialization failed."));
             return;
           }
         }
@@ -333,22 +336,34 @@ export class HiddenRProcess implements InlineRTransport {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw exitError(child.exitCode, child.signalCode);
     }
-    if (options.initialization) {
-      try {
-        this.rProcessId = await this.initialize(child, options.initialization);
+    let initialization = options.initialization;
+    if (!initialization) {
+      // Spawning does not mean R has finished its startup profile. Use the same
+      // readiness protocol without viewer attachment so waiting work can cancel.
+      const token = randomUUID();
+      const successMarker = `__R_NOTEBOOK_READY_${token}__:`;
+      initialization = {
+        command: `base::cat("\\n", ${JSON.stringify(successMarker)}, base::Sys.getpid(), "\\n", sep = "")`,
+        successMarker,
+        failureMarker: `__R_NOTEBOOK_ERROR_${token}__:`,
+      };
+    }
+    try {
+      this.rProcessId = await this.initialize(child, initialization);
+      if (options.initialization) {
         this.log("Automatic vscode-R attachment request sent.");
-      } catch (error) {
-        const stopping = this.stopping ??= terminateRProcess(child);
-        this.clearProcess(child);
-        try {
-          await stopping;
-        } finally {
-          // A failed start can be retried, but concurrent disposal must retain
-          // the same termination promise until the process has exited.
-          if (!this.disposed) this.stopping = undefined;
-        }
-        throw error;
       }
+    } catch (error) {
+      const stopping = this.stopping ??= terminateRProcess(child);
+      this.clearProcess(child);
+      try {
+        await stopping;
+      } finally {
+        // A failed start can be retried, but concurrent disposal must retain
+        // the same termination promise until the process has exited.
+        if (!this.disposed) this.stopping = undefined;
+      }
+      throw error;
     }
     this.ready = true;
     this.runningChanged(true);

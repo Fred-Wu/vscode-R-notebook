@@ -85,12 +85,14 @@ test("real R interruption preserves the session and shutdown exits the process",
 const cancellationCases = (["native text", "code cell"] as const).flatMap(operation =>
   [false, true].map(duringLoad => ({ operation, duringLoad })));
 
-for (const operation of ["native text", "code cell"] as const) {
-  test(`${operation} cancellation during initialization preserves shared startup without dispatching stale work`, { timeout: 15000 }, async (t) => {
+for (const duringProfile of [false, true]) for (const operation of ["native text", "code cell"] as const) {
+  test(`${operation} cancellation during ${duringProfile ? "profile startup without attachment" : "initialization"} preserves shared startup without dispatching stale work`, { timeout: 15000 }, async (t) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-start-cancel-"));
     const document = path.join(directory, "test.Rmd");
     const release = path.join(directory, "release");
     const initializing = path.join(directory, "initializing");
+    const profile = path.join(directory, ".Rprofile");
+    const holdStartup = `writeLines(as.character(Sys.getpid()), ${JSON.stringify(initializing.replaceAll("\\", "/"))}); while (!file.exists(${JSON.stringify(release.replaceAll("\\", "/"))})) Sys.sleep(0.02)`;
     let enteredInitialization!: () => void;
     const entered = new Promise<void>(resolve => { enteredInitialization = resolve; });
     const watcher = watch(directory, (_event, name) => {
@@ -99,10 +101,11 @@ for (const operation of ["native text", "code cell"] as const) {
     const messages: string[] = [];
     const r = new HiddenRProcess(async () => ({
       executable: process.env.R_EXECUTABLE || (process.platform === "win32" ? "R.exe" : "R"),
-      args: ["--vanilla", "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
-      cwd: directory, env: { ...process.env },
-      initialization: {
-        command: `writeLines('started', ${JSON.stringify(initializing.replaceAll("\\", "/"))}); while (!file.exists(${JSON.stringify(release.replaceAll("\\", "/"))})) Sys.sleep(0.02); cat("\\nREADY:", Sys.getpid(), "\\n", sep="")`,
+      args: [...(duringProfile ? ["--no-site-file", "--no-save", "--no-restore"] : ["--vanilla"]),
+        "--quiet", process.platform === "win32" ? "--ess" : "--interactive"],
+      cwd: directory, env: { ...process.env, ...(duringProfile ? { R_PROFILE_USER: profile } : {}) },
+      initialization: duringProfile ? undefined : {
+        command: `${holdStartup}; cat("\\nREADY:", Sys.getpid(), "\\n", sep="")`,
         successMarker: "READY:", failureMarker: "FAILED:",
       },
     }), message => messages.push(message));
@@ -118,7 +121,16 @@ for (const operation of ["native text", "code cell"] as const) {
         return { dispose: () => { listeners.delete(listener); } };
       },
     };
-    const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), r);
+    let dispatched = 0;
+    const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), {
+      send: async (command, token) => {
+        const dispatch = await r.send(command, token);
+        dispatched++;
+        return dispatch;
+      },
+      interrupt: () => r.interrupt(),
+    });
+    if (duringProfile) await fs.writeFile(profile, holdStartup + "\n");
     const startup = r.start();
     void startup.catch(() => undefined);
     try {
@@ -127,21 +139,26 @@ for (const operation of ["native text", "code cell"] as const) {
         ? bridge.execute("```{r}\nstop('cancelled cell ran')\n```", document, token)
           .then(result => assert.deepEqual(result, { success: false, outputs: [] }))
         : assert.rejects(bridge.renderText([], "Hello\n", document, token), TextRenderCancelledError);
+      void request.catch(() => undefined);
       await Promise.all([waiting, entered]);
+      assert.equal(r.running, false, "R was marked ready before startup completed");
       token.isCancellationRequested = true;
       listeners.forEach(listener => listener(undefined));
       await request;
       assert.equal(r.running, false, "Cancellation waited for initialization");
       assert.equal(listeners.size, 0, "Startup cancellation leaked its listener");
+      assert.equal(dispatched, 0, "Cancelled work was dispatched during startup");
       await fs.writeFile(release, "ready");
       await startup;
       const pid = r.processId;
+      assert.equal(pid, Number(await fs.readFile(initializing, "utf8")));
       const result = await bridge.execute("```{r}\n42L\n```", document, {
         isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }),
       });
       assert.equal(result.success, true);
       assert.ok(result.outputs.some(output => Buffer.from(output.data).toString().includes("42")));
       assert.equal(r.processId, pid);
+      assert.equal(dispatched, 1, "Cancelled work was dispatched after startup");
       assert.ok(!messages.some(message => /cannot open|cancelled cell ran/i.test(message)),
         "Cancelled work was dispatched after its request files were removed");
     } finally {

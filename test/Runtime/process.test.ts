@@ -100,6 +100,7 @@ test("keeps state in one hidden process and isolates different processes", async
     args: ["-e", FAKE_R_PROCESS],
     cwd: directory,
     env: { ...process.env },
+    initialization: { command: "init", successMarker: "READY ", failureMarker: "FAILED " },
   });
   const firstRunningStates: boolean[] = [];
   const first = new HiddenRProcess(
@@ -116,7 +117,7 @@ test("keeps state in one hidden process and isolates different processes", async
   (await first.send("set first-session")).dispose();
   (await second.send("set second-session")).dispose();
   assert.equal(first.running, true);
-  assert.equal(first.processId, undefined);
+  assert.ok(first.processId);
   assert.deepEqual(firstRunningStates, [true]);
 
   const firstResult = path.join(directory, "first.txt");
@@ -319,6 +320,7 @@ test("shutdown terminates render subprocesses as well as their parent", async (t
   const hidden = new HiddenRProcess(async () => ({
     executable: process.execPath, args: ["-e", FAKE_R_PROCESS],
     cwd: directory, env: { ...process.env },
+    initialization: { command: "init", successMarker: "READY ", failureMarker: "FAILED " },
   }), () => undefined);
   let childPid: number | undefined;
   t.after(async () => {
