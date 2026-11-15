@@ -49,9 +49,11 @@ test("nested notebook cells retain project profile libraries and notebook-relati
     await fs.mkdir(notebookDirectory, { recursive: true });
     await fs.mkdir(library, { recursive: true });
     // Match uvr's project-relative activation without requiring uvr installation.
+    // Unix R startup ignores an incomplete final line in .Rprofile.
     await fs.writeFile(path.join(project, ".Rprofile"), [
       '.libPaths(c(file.path(getwd(), ".uvr", "library"), .libPaths()))',
       'options(notebook.test.startup.directory = getwd())',
+      "",
     ].join("\n"));
     await fs.writeFile(path.join(notebookDirectory, "relative.txt"), "notebook-relative");
     const rString = (value: string) => JSON.stringify(value.replaceAll("\\", "/"));
