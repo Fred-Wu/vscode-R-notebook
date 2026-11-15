@@ -82,8 +82,10 @@ test("real R interruption preserves the session and shutdown exits the process",
   }
 });
 
-for (const duringLoad of [false, true]) {
-  test(`native text cancellation ${duringLoad ? "during helper loading" : "before R accepts the request"} completes and preserves R`, { timeout: 20000 }, async (t) => {
+const cancellationCases = (["native text", "code cell"] as const).flatMap(operation =>
+  [false, true].map(duringLoad => ({ operation, duringLoad })));
+for (const { operation, duringLoad } of cancellationCases) {
+  test(`${operation} cancellation ${duringLoad ? "during helper loading" : "before R accepts the request"} completes and preserves R`, { timeout: 20000 }, async (t) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-render-cancel-"));
     const document = path.join(directory, "test.Rmd");
     const helper = path.join(directory, "slow-helper.R");
@@ -116,6 +118,7 @@ for (const duringLoad of [false, true]) {
       await fs.writeFile(helper, `writeLines('loading', ${JSON.stringify(path.join(directory, "loading").replaceAll("\\", "/"))})\nSys.sleep(60)\n`);
       await r.start();
       const pid = r.processId;
+      (await r.send("notebook_retained_value <- 42L")).dispose();
       // Hold R before dispatch to exercise cancellation before the ready marker,
       // separately from interruption inside sys.source() after acknowledgement.
       if (!duringLoad) (await r.send("Sys.sleep(0.5)")).dispose();
@@ -127,10 +130,17 @@ for (const duringLoad of [false, true]) {
         },
         interrupt: () => r.interrupt(),
       });
-      await assert.rejects(bridge.renderText([], "text\n", document, token), TextRenderCancelledError);
+      if (operation === "native text") {
+        await assert.rejects(bridge.renderText([], "text\n", document, token), TextRenderCancelledError);
+      } else {
+        assert.deepEqual(await bridge.execute("```{r}\n42\n```", document, token), {
+          success: false, outputs: [],
+        });
+      }
       const next = await new RExecutionBridge(path.resolve("resources/r/execute.R"), r)
-        .execute("```{r}\n42\n```", document, { ...token, isCancellationRequested: false });
+        .execute("```{r}\nnotebook_retained_value\n```", document, { ...token, isCancellationRequested: false });
       assert.equal(next.success, true);
+      assert.ok(next.outputs.some((output) => Buffer.from(output.data).toString().includes("42")));
       assert.equal(r.processId, pid);
     } finally {
       watcher.close();

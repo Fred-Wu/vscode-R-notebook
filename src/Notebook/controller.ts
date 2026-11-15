@@ -93,7 +93,8 @@ export class RNotebookController implements vscode.Disposable {
   private selection = 0;
   private executionOrder = 0;
   private disposed = false;
-  private readonly stopping = new Set<Promise<void>>();
+  private readonly stopping = new Map<string, Promise<void>>();
+  private readonly restarts = new Map<string, symbol>();
 
   constructor(
     private readonly helperPath: string,
@@ -147,9 +148,16 @@ export class RNotebookController implements vscode.Disposable {
     if (session.startup) {
       return session.startup;
     }
-    const start = this.sessionIntegrationEnabled
-      ? this.attachment.ensureAttached(session.process, makePreferred)
-      : session.process.start();
+    const startProcess = (): Promise<void> => {
+      if (session.stopped || this.disposed) {
+        throw new Error("The notebook's R session has closed.");
+      }
+      return this.sessionIntegrationEnabled
+        ? this.attachment.ensureAttached(session.process, makePreferred)
+        : session.process.start();
+    };
+    const stopping = this.stopping.get(session.uri.toString());
+    const start = stopping ? stopping.then(startProcess) : startProcess();
     if (session.process.running) {
       return start;
     }
@@ -209,6 +217,7 @@ export class RNotebookController implements vscode.Disposable {
 
   notebookTabClosed(notebookUri: vscode.Uri): void {
     const key = notebookUri.toString();
+    this.restarts.delete(key);
     if (this.selectedNotebookKey === key) this.selection++;
     this.markdownInputSignatures.delete(key);
     const session = this.sessions.get(key);
@@ -614,10 +623,12 @@ export class RNotebookController implements vscode.Disposable {
 
   shutdownSession(notebookUri: vscode.Uri): Promise<void> {
     const key = notebookUri.toString();
+    this.restarts.delete(key);
     if (this.selectedNotebookKey === key) this.selection++;
+    const previous = this.stopping.get(key);
     const session = this.sessions.get(key);
     if (!session) {
-      return Promise.resolve();
+      return previous ?? Promise.resolve();
     }
     this.sessions.delete(key);
     session.stopped = true;
@@ -626,10 +637,24 @@ export class RNotebookController implements vscode.Disposable {
       session.shutdownTimer = undefined;
     }
     this.attachment.forget(session.process);
-    const stopped = session.process.dispose();
+    const termination = session.process.dispose();
+    // A replacement may still be waiting for its predecessor to stop. Closing
+    // it must continue to await both processes, even if either shutdown fails.
+    const stopped = previous
+      ? Promise.allSettled([previous, termination]).then((results) => {
+          const errors = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []);
+          if (errors.length > 0) {
+            throw new AggregateError(errors, "Could not stop the notebook's R sessions.");
+          }
+        })
+      : termination;
     session.pendingTextRender?.cancellation.cancel();
-    this.stopping.add(stopped);
-    void stopped.then(() => this.stopping.delete(stopped), () => this.stopping.delete(stopped));
+    this.stopping.set(key, stopped);
+    const finished = (): void => {
+      if (this.stopping.get(key) === stopped) this.stopping.delete(key);
+    };
+    void stopped.then(finished, finished);
     this.sessionShutdown.fire(notebookUri);
     return stopped;
   }
@@ -642,27 +667,39 @@ export class RNotebookController implements vscode.Disposable {
       throw new Error("R notebook execution requires a local file.");
     }
 
-    await this.shutdownSession(notebook.uri);
-    const session = this.getSession(notebook);
+    const key = notebook.uri.toString();
+    const stopping = this.shutdownSession(notebook.uri);
+    const restart = Symbol();
+    this.restarts.set(key, restart);
+    let session: NotebookSession | undefined;
     try {
+      await stopping;
+      if (this.restarts.get(key) !== restart || this.disposed || notebook.isClosed) {
+        return false;
+      }
+      session = this.getSession(notebook);
       await this.ensureSessionStarted(
         session,
-        this.selectedNotebookKey === notebook.uri.toString()
+        this.selectedNotebookKey === key
       );
+      if (this.restarts.get(key) !== restart || session.stopped) return false;
       await this.updateNativeTextCache(notebook, undefined);
-      const restarted = this.sessions.get(notebook.uri.toString()) === session;
+      const restarted = this.restarts.get(key) === restart && this.sessions.get(key) === session;
       if (restarted) {
         this.markdownStateChanged.fire(notebook);
       }
       return restarted;
     } catch (error) {
-      if (this.sessions.get(notebook.uri.toString()) === session) {
-        await this.shutdownSession(notebook.uri);
+      if (this.restarts.get(key) === restart) {
+        if (session && this.sessions.get(key) === session) {
+          await this.shutdownSession(notebook.uri);
+        }
         throw error;
       }
       return false;
     } finally {
-      if (this.selectedNotebookKey !== notebook.uri.toString()) {
+      if (this.restarts.get(key) === restart) this.restarts.delete(key);
+      if (!this.disposed && this.selectedNotebookKey !== key) {
         const selectedSession = this.selectedNotebookKey
           ? this.sessions.get(this.selectedNotebookKey)
           : undefined;
@@ -764,6 +801,7 @@ export class RNotebookController implements vscode.Disposable {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.restarts.clear();
     for (const session of [...this.sessions.values()]) {
       this.shutdownSession(session.uri);
     }
@@ -772,7 +810,7 @@ export class RNotebookController implements vscode.Disposable {
     this.notebookStateChanged.dispose();
     this.sessionShutdown.dispose();
     this.controller.dispose();
-    const stopped = await Promise.allSettled(this.stopping);
+    const stopped = await Promise.allSettled(this.stopping.values());
     const errors = stopped.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : []);
     if (errors.length > 0) {

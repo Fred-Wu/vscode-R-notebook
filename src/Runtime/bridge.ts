@@ -42,6 +42,25 @@ function rString(value: string): string {
     .replace(/\n/g, "\\n")}"`;
 }
 
+/** Install completion cleanup before acknowledging that R can be interrupted. */
+function interruptibleRequest(requestDirectory: string, body: readonly string[]): string {
+  return [
+    "base::suspendInterrupts(base::local({",
+    "  base::on.exit({",
+    `    if (!base::file.exists(${rString(path.join(requestDirectory, "done"))})) {`,
+    `      base::writeLines('false', ${rString(path.join(requestDirectory, ".done"))})`,
+    `      base::file.rename(${rString(path.join(requestDirectory, ".done"))}, ${rString(path.join(requestDirectory, "done"))})`,
+    "    }",
+    "  }, add = TRUE)",
+    `  base::writeLines('ready', ${rString(path.join(requestDirectory, "ready"))})`,
+    "  base::allowInterrupts({",
+    ...body,
+    "  })",
+    "}))",
+    "",
+  ].join("\n");
+}
+
 function parseMetadata(content: string): OutputMetadata {
   const values: Record<string, string> = {};
   for (const line of content.split(/\r?\n/)) {
@@ -246,6 +265,7 @@ export class RExecutionBridge {
     const requestPath = path.join(requestDirectory, "request.R");
     let nativeDocumentPath = documentPath;
     let completion: ReturnType<typeof waitForDone> | undefined;
+    let ready: ReturnType<typeof waitForDone> | undefined;
     let dispatch: InlineDispatch | undefined;
     let cancellation: vscode.Disposable | undefined;
     let cancelled = false;
@@ -281,8 +301,7 @@ export class RExecutionBridge {
       const quartoExecutable = this.configuredQuartoExecutable?.() ?? "";
       await fsPromises.writeFile(
         requestPath,
-        [
-          "local({",
+        interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
           "  bridge$r_notebook_execute(",
@@ -297,24 +316,32 @@ export class RExecutionBridge {
           "    evaluation_env = .GlobalEnv,",
           `    quarto_executable = ${rString(quartoExecutable)}`,
           "  )",
-          "})",
-          "",
-        ].join("\n"),
+        ]),
         "utf8"
       );
       completion = waitForDone(requestDirectory);
+      ready = waitForDone(requestDirectory, "ready");
       if (token.isCancellationRequested) {
         return { success: false, outputs: [] };
       }
       dispatch = await this.transport.send(
         `base::source(${rString(requestPath)}, echo = FALSE)`
       );
+      // Sending bytes does not mean R has accepted this request. In particular,
+      // helper loading must be interruptible only after completion is guaranteed.
+      const interruptible = Promise.race([
+        ready.promise.then(() => true),
+        completion.promise.then(() => false),
+        dispatch.failure,
+      ]);
+      void interruptible.catch(() => undefined);
       const interrupt = (): void => {
         if (cancelled) {
           return;
         }
         cancelled = true;
-        interruptCompletion = this.transport.interrupt();
+        interruptCompletion = interruptible.then((started) =>
+          started ? this.transport.interrupt() : undefined);
         void interruptCompletion.catch(reportInterruptFailure);
       };
       cancellation = token.onCancellationRequested(interrupt);
@@ -331,6 +358,7 @@ export class RExecutionBridge {
       cancellation?.dispose();
       dispatch?.dispose();
       completion?.watcher.close();
+      ready?.watcher.close();
       await fsPromises.rm(requestDirectory, { recursive: true, force: true });
     }
   }
@@ -367,19 +395,7 @@ export class RExecutionBridge {
       await fsPromises.writeFile(cellsPath, JSON.stringify(cells), "utf8");
       await fsPromises.writeFile(
         requestPath,
-        [
-          // Do not interrupt helper loading before a completion handler exists.
-          // R acknowledges that handler under suspended interrupts, so even an
-          // immediate refresh can safely cancel the subsequent source() call.
-          "base::suspendInterrupts(base::local({",
-          "  base::on.exit({",
-          `    if (!base::file.exists(${rString(path.join(requestDirectory, "done"))})) {`,
-          `      base::writeLines('false', ${rString(path.join(requestDirectory, ".done"))})`,
-          `      base::file.rename(${rString(path.join(requestDirectory, ".done"))}, ${rString(path.join(requestDirectory, "done"))})`,
-          "    }",
-          "  }, add = TRUE)",
-          `  base::writeLines('ready', ${rString(path.join(requestDirectory, "ready"))})`,
-          "  base::allowInterrupts({",
+        interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
           "  bridge$r_notebook_render_text(",
@@ -390,10 +406,7 @@ export class RExecutionBridge {
           "    evaluation_env = .GlobalEnv,",
           `    quarto_executable = ${rString(quartoExecutable)}`,
           "  )",
-          "  })",
-          "}))",
-          "",
-        ].join("\n"),
+        ]),
         "utf8"
       );
       completion = waitForDone(requestDirectory);

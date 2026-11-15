@@ -190,6 +190,115 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     await c.dispose();
   });
 
+  for (const action of ["shutdown", "close tab", "dispose"] as const) {
+    await t.test(`pending restart cannot undo ${action}`, async () => {
+      const c = controller();
+      const document = notebook("code");
+      await c.selectNotebook(document);
+      const count = processes.length;
+      const terminated = deferred<void>();
+      processes.at(-1)!.dispose = () => terminated.promise;
+      const restarting = c.restartSession(document);
+      let shutdown: Promise<void> | undefined;
+      try {
+        if (action === "shutdown") shutdown = c.shutdownSession(document.uri);
+        else if (action === "close tab") c.notebookTabClosed(document.uri);
+        else shutdown = c.dispose();
+        terminated.resolve();
+        assert.equal(await restarting, false);
+        await shutdown;
+        assert.equal(processes.length, count, "A stale restart created another process");
+        assert.equal(c.hasSession(document.uri), false);
+      } finally { terminated.resolve(); await c.dispose(); }
+    });
+  }
+
+  await t.test("repeated shutdown waits for the same outstanding termination", async () => {
+    const c = controller();
+    const document = notebook("code");
+    await c.selectNotebook(document);
+    const terminated = deferred<void>();
+    processes.at(-1)!.dispose = () => terminated.promise;
+    try {
+      const first = c.shutdownSession(document.uri);
+      let finished = false;
+      const second = c.shutdownSession(document.uri).then(() => { finished = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(finished, false, "Shutdown returned while its process was still stopping");
+      terminated.resolve();
+      await Promise.all([first, second]);
+    } finally { terminated.resolve(); await c.dispose(); }
+  });
+
+  await t.test("only the latest restart starts a replacement after termination", async () => {
+    const c = controller();
+    const document = notebook("code");
+    await c.selectNotebook(document);
+    const count = processes.length;
+    const terminated = deferred<void>();
+    processes.at(-1)!.dispose = () => terminated.promise;
+    const first = c.restartSession(document);
+    const second = c.restartSession(document);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(processes.length, count, "Restart overlapped the old process");
+      terminated.resolve();
+      assert.deepEqual(await Promise.all([first, second]), [false, true]);
+      assert.equal(processes.length, count + 1);
+      assert.equal(processes.at(-1)!.starts, 1);
+    } finally {
+      terminated.resolve();
+      await Promise.allSettled([first, second]);
+      await c.dispose();
+    }
+  });
+
+  for (const stopAgain of [false, true]) {
+    await t.test(`selection waits for prior termination (shutdown again=${stopAgain})`, async () => {
+      const c = controller();
+      const document = notebook("code");
+      await c.selectNotebook(document);
+      const terminated = deferred<void>();
+      processes.at(-1)!.dispose = () => terminated.promise;
+      const first = c.shutdownSession(document.uri);
+      const selected = c.selectNotebook(document);
+      const selectionResult = stopAgain ? assert.rejects(selected, /session has closed/) : selected;
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const replacement = processes.at(-1)!;
+        assert.equal(replacement.starts, 0, "Selection started R before its predecessor exited");
+        let finished = false;
+        const second = stopAgain
+          ? c.shutdownSession(document.uri).then(() => { finished = true; })
+          : undefined;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(finished, false);
+        terminated.resolve();
+        await Promise.all([first, second, selectionResult]);
+        assert.equal(replacement.starts, stopAgain ? 0 : 1);
+        assert.equal(c.hasSession(document.uri), !stopAgain);
+      } finally {
+        terminated.resolve();
+        await Promise.allSettled([first, selectionResult]);
+        await c.dispose();
+      }
+    });
+  }
+
+  await t.test("a failed shutdown prevents the pending restart from launching R", async () => {
+    const c = controller();
+    const document = notebook("code");
+    await c.selectNotebook(document);
+    const count = processes.length;
+    const failure = new Error("Could not terminate R");
+    processes.at(-1)!.dispose = async () => { throw failure; };
+    try {
+      await assert.rejects(c.restartSession(document), (error: unknown) => error === failure);
+      assert.equal(processes.length, count);
+      assert.equal(c.hasSession(document.uri), false);
+    } finally { await c.dispose(); }
+  });
+
   await t.test("Stop All cancels running and queued cells without poisoning subsequent execution", async () => {
     executions.length = 0;
     const c = controller();
