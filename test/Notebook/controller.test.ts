@@ -38,6 +38,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   const metadataUpdates: unknown[] = [];
   let textRenders = 0;
   let renderFailure: Error | undefined;
+  let renderBridge = async (_token: vscode.CancellationToken) => {};
   const shownErrors: string[] = [];
   type Edit = { edits: Array<{ notebookMetadata?: object } | undefined> };
   let applyEdit = async (_edit: Edit) => true;
@@ -97,7 +98,8 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
           await executeBridge(source, token);
           return { success: !token.isCancellationRequested, outputs: [] };
         }
-        async renderText() {
+        async renderText(_cells: unknown, _source: string, _path: string, token: vscode.CancellationToken) {
+          await renderBridge(token);
           if (renderFailure) throw renderFailure;
           return `<div id="r-notebook-markdown-text">Render ${++textRenders}</div>`;
         }
@@ -443,6 +445,66 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     await assert.rejects(rendering, TextRenderCancelledError);
     assert.equal(c.hasSession(document.uri), false);
     await assert.rejects(c.renderText(document, "text"), /session has closed/);
+  });
+
+  await t.test("running code re-requests a cancelled static YAML preview after execution", async () => {
+    const c = controller();
+    const document = notebook("markup");
+    const markup = document.getCells()[0]!;
+    Object.assign(markup.document, { getText: () => "---\ntitle: Report\noutput:\n  html_document:\n    toc: true\n---\n# Heading" });
+    const code = notebook("code").getCells()[0]!;
+    Object.assign(code, { notebook: document, index: 1 });
+    Object.assign(document, { getCells: () => [markup, code] });
+    const started = deferred<void>();
+    renderBridge = token => new Promise<void>((_resolve, reject) => {
+      token.onCancellationRequested(() => reject(new TextRenderCancelledError()));
+      started.resolve();
+    });
+    const refreshed: unknown[] = [];
+    c.onDidChangeMarkdownState(value => refreshed.push(value));
+    executeBridge = async () => assert.deepEqual(refreshed, [], "Preview resumed before code completed");
+    try {
+      const rendering = assert.rejects(c.renderText(document, "text"), TextRenderCancelledError);
+      await started.promise;
+      await execute([code]);
+      await rendering;
+      assert.deepEqual(refreshed, [document], "Cancelled preview was never requested again");
+    } finally {
+      renderBridge = async () => {};
+      executeBridge = async () => {};
+      await c.dispose();
+    }
+  });
+
+  await t.test("a new preview request does not join a cancelled render with the same source", async () => {
+    const c = controller();
+    const document = notebook("markup");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let calls = 0;
+    renderBridge = async token => {
+      if (++calls > 1) return;
+      started.resolve();
+      await release.promise;
+      assert.equal(token.isCancellationRequested, true);
+      throw new TextRenderCancelledError();
+    };
+    try {
+      const cancelled = assert.rejects(c.renderText(document, "text"), TextRenderCancelledError);
+      await started.promise;
+      const refresh = c.refreshMarkdown(document);
+      const next = c.renderText(document, "text");
+      void next.catch(() => undefined);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      release.resolve();
+      await Promise.all([cancelled, refresh]);
+      assert.ok((await next).html.includes("Render"));
+      assert.equal(calls, 2);
+    } finally {
+      release.resolve();
+      renderBridge = async () => {};
+      await c.dispose();
+    }
   });
 
   for (const { name, source, invalidates } of [
