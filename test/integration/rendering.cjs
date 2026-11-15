@@ -110,6 +110,8 @@ exports.run = async () => {
     assert.fail(description);
   }
   try {
+    await require('./yamlRefresh.cjs').run({ until, inspect });
+    if (process.env.R_NOTEBOOK_RENDER_YAML_ONLY) return;
     await require('./cellOptions.cjs').run({ until, inspect });
     if (process.env.R_NOTEBOOK_RENDER_OPTIONS_ONLY) return;
     if (process.env.R_NOTEBOOK_RENDER_FIXTURE) {

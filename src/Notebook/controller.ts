@@ -317,12 +317,16 @@ export class RNotebookController implements vscode.Disposable {
   }
 
   private async execute(cells: readonly vscode.NotebookCell[]): Promise<void> {
+    const interruptedPreviews = new Map<NotebookSession, vscode.NotebookDocument>();
     const tasks = cells.map((cell) => {
       const key = cell.notebook.uri.toString();
       const session = this.getSession(cell.notebook);
       // Register queued cells immediately so Stop All can cancel their tokens.
       const execution = this.controller.createNotebookCellExecution(cell);
-      session.pendingTextRender?.cancellation.cancel();
+      if (session.pendingTextRender) {
+        interruptedPreviews.set(session, cell.notebook);
+        session.pendingTextRender.cancellation.cancel();
+      }
       const task = session.queue.then(async () => {
         if (session.stopped || this.sessions.get(key) !== session ||
             execution.token.isCancellationRequested) {
@@ -334,7 +338,18 @@ export class RNotebookController implements vscode.Disposable {
       session.queue = task.catch(() => undefined);
       return task;
     });
-    await Promise.all(tasks);
+    try {
+      await Promise.all(tasks);
+    } finally {
+      // Cancellation drops the renderer's response. Resume interrupted previews
+      // after the batch, even when the Markdown has no executable R expressions.
+      for (const [session, notebook] of interruptedPreviews) {
+        if (!this.disposed && !session.stopped && !notebook.isClosed &&
+            this.sessions.get(notebook.uri.toString()) === session) {
+          this.markdownStateChanged.fire(notebook);
+        }
+      }
+    }
   }
 
   private notebookContext(notebook: vscode.NotebookDocument): {
@@ -460,7 +475,8 @@ export class RNotebookController implements vscode.Disposable {
       });
     }
     const renderKey = `${sourceHash}:${session.textRevision}`;
-    if (session.pendingTextRender?.key === renderKey) {
+    if (session.pendingTextRender?.key === renderKey &&
+        !session.pendingTextRender.cancellation.token.isCancellationRequested) {
       return session.pendingTextRender.promise.then((html) => ({
         html,
         marker: target.marker,
