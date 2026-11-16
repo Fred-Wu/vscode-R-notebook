@@ -20,10 +20,10 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 ## Setup
 
 - Install R.
-- Install `knitr` 1.44 or newer and `rmarkdown`:
+- Install `knitr` 1.44 or newer, `litedown` 1.0 or newer, and `jsonlite`:
 
   ```r
-  install.packages(c("knitr", "rmarkdown"))
+  install.packages(c("knitr", "litedown", "jsonlite"))
   ```
 
 - On Windows, install `ps` to cancel a cell without stopping its R session:
@@ -32,13 +32,12 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
   install.packages("ps")
   ```
 
-- Install `bookdown` when an R Markdown document uses a `bookdown::` output format.
+- Install `rbibutils` if your notebook preview uses bibliography citations.
 - Install [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r).
 - Optional: install [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) to use **Run Cell in R Console**. Inline execution, rendering, and notebook sessions work without it.
 - Configure R through vscode-R's `r.executablePath` setting, or make R available through `R_HOME` or `PATH`.
-- Install the Quarto CLI for `.qmd` notebooks.
+- Optional: install the Quarto CLI for Quarto-aware completion suggestions and full-document publishing.
 - Set `r.notebook.quartoPath` if Quarto is not on the R session's `PATH`.
-- Make Pandoc available to `rmarkdown` for R Markdown-cell display.
 - Trust the VS Code workspace before running local R code.
 
 ## Use
@@ -53,9 +52,9 @@ The notebook renders only the minimal information from `.rmd` and `.qmd` files n
 - Treat `#|` pipe values as the winner when R Markdown options conflict.
 - Store Quarto cell options in `#|` pipe lines.
 
-The first Markdown cell displays the document's title, author, and date using the
-native renderer's formatting. When the YAML enables a table of contents (`toc: true`
-in the HTML format options), it appears below the title block and before the body.
+The first Markdown cell displays the document's title, author, and date. When the
+YAML enables a table of contents (`toc: true` in the HTML format options), it
+appears below the title block and before the body.
 TOC links reveal the notebook cell containing the heading. TOC depth and section
 numbering follow the YAML settings. The YAML source remains available in the
 collapsible **YAML front matter** section; the displayed header and TOC are not
@@ -135,10 +134,10 @@ If integration does not start:
 
 - [vscode-R](https://marketplace.visualstudio.com/items?itemName=REditorSupport.r) — Provides the R path and optional viewer integration.
 - [R Console for VS Code](https://marketplace.visualstudio.com/items?itemName=RConsole.vsc-r-console) (optional) — Enables **Run Cell in R Console**. The notebook runs its own native R process independently.
-- `knitr` 1.44 or newer and `rmarkdown` — Support execution and Markdown-cell display.
-- Quarto CLI — Supports `.qmd` notebooks.
+- `knitr` 1.44 or newer, `litedown` 1.0 or newer, and `jsonlite` — Required R packages.
+- `rbibutils` (optional) — Resolves bibliography citations.
+- Quarto CLI (optional) — Enables Quarto-aware completion suggestions and full-document publishing.
 - `ps` on Windows — Interrupts a cell without stopping its session.
-- `bookdown` when required — Supports `bookdown::` R Markdown formats.
 
 ## Development Note
 

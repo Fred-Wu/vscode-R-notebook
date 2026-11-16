@@ -1,4 +1,4 @@
-/** Plain Markdown stays with the VS Code renderer; special syntax uses Quarto. */
+/** Plain Markdown stays with the VS Code renderer; document features use the shared R renderer. */
 export function needsNativeTextRender(source: string): boolean {
   if (source.trim().length === 0) return false;
   if (/`r\s+[^`]+`/.test(source)) return true;

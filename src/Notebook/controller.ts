@@ -25,7 +25,6 @@ import { RStartupCancelledError, waitForRStartup } from "../Runtime/startup";
 import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
-  quartoExecutableSetting,
 } from "../Runtime/launch";
 import type { RConsoleTransport } from "../Runtime/console";
 import { isQuartoNotebook } from "../notebookFile";
@@ -130,8 +129,7 @@ export class RNotebookController implements vscode.Disposable {
         process,
         bridge: new RExecutionBridge(
           this.helperPath,
-          process,
-          () => quartoExecutableSetting(notebook.uri)
+          process
         ),
         queue: Promise.resolve(),
         stopped: false,

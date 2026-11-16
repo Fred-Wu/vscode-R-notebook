@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Share knitr execution and litedown rendering between R Markdown and Quarto notebooks, with separate format adapters and no publishing-tool requirement for previews.
+
 ## [0.2.0] - 2026-08-02
 
 - Run R code in a separate inline session for each notebook and view results, plots, and table previews below cells.

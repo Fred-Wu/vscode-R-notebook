@@ -216,10 +216,8 @@ async function run(): Promise<void> {
       renderedTitle.getBoundingClientRect().height > 0, `${fixture.name}: native title is not visible`);
     check(fixtureCell.querySelector("[data-r-notebook-document-header]")?.textContent?.includes("Fred Wu"),
       `${fixture.name}: native author is missing`);
-    if (fixture.name.toLowerCase().endsWith(".rmd")) {
-      check(fixtureCell.querySelectorAll(".katex").length === 2,
+    check(fixtureCell.querySelectorAll(".katex").length === 2,
         `${fixture.name}: inline and display math were not initialized`);
-    }
     check(renderedToc && getComputedStyle(renderedToc).display !== "none" &&
       renderedToc.getBoundingClientRect().height > 0, `${fixture.name}: native TOC is not visible`);
     const tocStyles = JSON.stringify([renderedToc, ...['h2', 'ul', 'li', 'a', 'ul ul']
@@ -242,7 +240,7 @@ async function run(): Promise<void> {
       fixtureCell.textContent.includes("nested chunk example executed") &&
       fixtureCell.textContent.includes("Live value: 42."),
       `${fixture.name}: literal examples or evaluated inline text were lost`);
-    const noteId = fixture.name.toLowerCase().endsWith(".rmd") ? "fn-shared" : "fn1";
+    const noteId = "fn-shared";
     const noteLink = fixtureCell.querySelector<HTMLAnchorElement>(`a[href="#${noteId}"]`);
     const last = fixture.cells.at(-1)!;
     check(noteLink?.dataset.rNotebookTargetCell === last.id,

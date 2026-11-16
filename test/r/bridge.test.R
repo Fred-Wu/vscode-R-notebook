@@ -1,7 +1,8 @@
 source(file.path("resources", "r", "execute.R"), local = TRUE)
+r_notebook_load(file.path("resources", "r"))
 
 stopifnot(requireNamespace("knitr", quietly = TRUE))
-stopifnot(requireNamespace("rmarkdown", quietly = TRUE))
+stopifnot(requireNamespace("litedown", quietly = TRUE))
 
 test_root <- tempfile("r-notebook-bridge-test-")
 dir.create(test_root)
@@ -42,8 +43,7 @@ run_chunk <- function(name, source, notebook = document) {
     cell_key = name,
     output_dir = output_dir,
     working_dir = test_root,
-    evaluation_env = .GlobalEnv,
-    quarto_executable = ""
+    evaluation_env = .GlobalEnv
   )
   output_dir
 }
@@ -135,8 +135,7 @@ r_notebook_render_text(
   native_document_path = text_document,
   output_dir = text_output,
   working_dir = test_root,
-  evaluation_env = .GlobalEnv,
-  quarto_executable = ""
+  evaluation_env = .GlobalEnv
 )
 assert_done(text_output, "true")
 text_html <- paste(readLines(
@@ -146,10 +145,10 @@ text_html <- paste(readLines(
 ), collapse = "\n")
 stopifnot(grepl("Horizon", text_html, fixed = TRUE))
 stopifnot(grepl("r-notebook-markdown-title", text_html, fixed = TRUE))
-stopifnot(grepl('id="title-block-header"', text_html, fixed = TRUE))
+stopifnot(grepl('id="header"', text_html, fixed = TRUE))
 stopifnot(grepl("Horizon <em>report</em>", text_html, fixed = TRUE))
 stopifnot(grepl("Example Author", text_html, fixed = TRUE))
-stopifnot(grepl('class="date">2026-10-17', text_html, fixed = TRUE))
+stopifnot(grepl('class="date"><h3>2026-10-17', text_html, fixed = TRUE))
 stopifnot(grepl('id="TOC"', text_html, fixed = TRUE))
 stopifnot(grepl('href="#text"', text_html, fixed = TRUE))
 stopifnot(grepl('href="#details"', text_html, fixed = TRUE))
@@ -165,7 +164,7 @@ for (publishing_format in c("pdf", "docx")) {
   r_notebook_render_text(text_cells, preview_document, preview_output, test_root, .GlobalEnv)
   assert_done(preview_output, "true")
   preview_html <- paste(readLines(file.path(preview_output, "result.html"), warn = FALSE), collapse = "\n")
-  stopifnot(grepl('id="title-block-header"', preview_html, fixed = TRUE))
+  stopifnot(grepl('id="header"', preview_html, fixed = TRUE))
   stopifnot(grepl("Horizon <em>report</em>", preview_html, fixed = TRUE))
   stopifnot(grepl('id="TOC"', preview_html, fixed = TRUE))
   stopifnot(grepl('href="#details"', preview_html, fixed = TRUE))

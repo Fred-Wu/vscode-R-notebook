@@ -54,7 +54,7 @@ exports.nativeFixtures = () => {
       fixtures.push({ name, directory, cells: native.cells.map(({ id, marker }) => ({ id, marker })) });
     }
     const script = [
-      'args <- commandArgs(TRUE); source(args[[1L]], local=TRUE)',
+      'args <- commandArgs(TRUE); source(args[[1L]], local=TRUE); r_notebook_load(dirname(args[[1L]]))',
       'r_notebook_math_assets <- normalizePath(file.path(dirname(args[[1L]]), "../../dist/katex"), winslash="/", mustWork=TRUE)',
       'for (directory in list.dirs(args[[2L]], recursive=FALSE, full.names=FALSE)) {',
       '  dir <- file.path(args[[2L]], directory)',

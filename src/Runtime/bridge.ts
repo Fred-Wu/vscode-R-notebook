@@ -184,75 +184,17 @@ async function snapshotDocument(
   documentPath: string,
   documentSource: string
 ): Promise<string> {
-  let sourceRoot = path.dirname(documentPath);
-  while (true) {
-    const hasProject = await Promise.all(
-      ["_quarto.yml", "_quarto.yaml"].map(async (name) => {
-        try {
-          await fsPromises.access(path.join(sourceRoot, name));
-          return true;
-        } catch {
-          return false;
-        }
-      })
-    ).then((results) => results.some(Boolean));
-    if (hasProject) {
-      break;
-    }
-    const parent = path.dirname(sourceRoot);
-    if (parent === sourceRoot) {
-      sourceRoot = path.dirname(documentPath);
-      break;
-    }
-    sourceRoot = parent;
-  }
-
-  const relativeDocument = path.relative(sourceRoot, documentPath);
-  const parts = relativeDocument.split(path.sep);
-  const supportDirectory = `${path.parse(documentPath).name}_files`;
-  let sourceDirectory = sourceRoot;
-  let snapshotDirectory = path.join(requestDirectory, "document");
-  for (const [index, part] of parts.entries()) {
-    await fsPromises.mkdir(snapshotDirectory, { recursive: true });
-    const entries = await fsPromises.readdir(sourceDirectory, { withFileTypes: true });
-    await Promise.all(entries.map(async (entry) => {
-      if (
-        entry.name === part ||
-        entry.name === ".quarto" ||
-        (index === parts.length - 1 && entry.name === supportDirectory)
-      ) {
-        return;
-      }
-      const source = path.join(sourceDirectory, entry.name);
-      const target = path.join(snapshotDirectory, entry.name);
-      const linkedDirectory = entry.isSymbolicLink()
-        ? (await fsPromises.stat(source)).isDirectory()
-        : entry.isDirectory();
-      if (process.platform === "win32" && !linkedDirectory) {
-        await fsPromises.copyFile(source, target);
-      } else {
-        await fsPromises.symlink(
-          source,
-          target,
-          linkedDirectory ? (process.platform === "win32" ? "junction" : "dir") : "file"
-        );
-      }
-    }));
-    sourceDirectory = path.join(sourceDirectory, part);
-    snapshotDirectory = path.join(snapshotDirectory, part);
-  }
-  await fsPromises.writeFile(snapshotDirectory, documentSource, {
-    encoding: "utf8",
-    flag: "wx",
-  });
-  return snapshotDirectory;
+  const snapshotDirectory = path.join(requestDirectory, "document");
+  await fsPromises.mkdir(snapshotDirectory, { recursive: true });
+  const snapshotPath = path.join(snapshotDirectory, path.basename(documentPath));
+  await fsPromises.writeFile(snapshotPath, documentSource, { encoding: "utf8", flag: "wx" });
+  return snapshotPath;
 }
 
 export class RExecutionBridge {
   constructor(
     private readonly helperPath: string,
-    private readonly transport: InlineRTransport,
-    private readonly configuredQuartoExecutable?: () => string
+    private readonly transport: InlineRTransport
   ) {}
 
   async execute(
@@ -303,12 +245,12 @@ export class RExecutionBridge {
       const cellId = context?.cellId ?? chunkSource;
       const documentId = context?.documentId ?? documentPath;
       const cellKey = createHash("sha256").update(cellId).digest("hex");
-      const quartoExecutable = this.configuredQuartoExecutable?.() ?? "";
       await fsPromises.writeFile(
         requestPath,
         interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
+          `  if (is.function(bridge$r_notebook_load)) bridge$r_notebook_load(${rString(path.dirname(this.helperPath))})`,
           `  bridge$r_notebook_math_assets <- ${rString(path.resolve(path.dirname(this.helperPath), "../../dist/katex"))}`,
           "  bridge$r_notebook_execute(",
           `    chunk_path = ${rString(chunkPath)},`,
@@ -319,8 +261,7 @@ export class RExecutionBridge {
           `    cell_key = ${rString(cellKey)},`,
           `    output_dir = ${rString(requestDirectory)},`,
           `    working_dir = ${rString(path.dirname(documentPath))},`,
-          "    evaluation_env = .GlobalEnv,",
-          `    quarto_executable = ${rString(quartoExecutable)}`,
+          "    evaluation_env = .GlobalEnv",
           "  )",
         ]),
         "utf8"
@@ -403,21 +344,21 @@ export class RExecutionBridge {
         documentPath,
         documentSource
       );
-      const quartoExecutable = this.configuredQuartoExecutable?.() ?? "";
       await fsPromises.writeFile(cellsPath, JSON.stringify(cells), "utf8");
       await fsPromises.writeFile(
         requestPath,
         interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
+          `  if (is.function(bridge$r_notebook_load)) bridge$r_notebook_load(${rString(path.dirname(this.helperPath))})`,
           `  bridge$r_notebook_math_assets <- ${rString(path.resolve(path.dirname(this.helperPath), "../../dist/katex"))}`,
           "  bridge$r_notebook_render_text(",
+          `    document_path = ${rString(documentPath)},`,
           `    cells_path = ${rString(cellsPath)},`,
           `    native_document_path = ${rString(snapshotPath)},`,
           `    output_dir = ${rString(requestDirectory)},`,
           `    working_dir = ${rString(path.dirname(documentPath))},`,
-          "    evaluation_env = .GlobalEnv,",
-          `    quarto_executable = ${rString(quartoExecutable)}`,
+          "    evaluation_env = .GlobalEnv",
           "  )",
         ]),
         "utf8"

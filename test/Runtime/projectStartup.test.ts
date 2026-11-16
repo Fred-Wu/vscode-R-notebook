@@ -8,7 +8,12 @@ import test from "node:test";
 import type * as vscode from "vscode";
 import { RExecutionBridge } from "../../src/Runtime/bridge";
 
-test("nested notebook cells retain project profile libraries and notebook-relative paths", { timeout: 30000 }, async (t) => {
+// launch.ts remains cached between cases; its VS Code facade must follow the
+// current test workspace instead of retaining the first case's deleted folder.
+let currentProject: string;
+let currentWorkspaceRoot: string;
+
+for (const extension of ["Rmd", "qmd"]) test(`${extension}: unsaved notebook cells retain project libraries, metadata, and relative resources`, { timeout: 30000 }, async (t) => {
   const executable = process.env.R_EXECUTABLE || (process.platform === "win32" ? "R.exe" : "R");
   if (spawnSync(executable, ["--version"], { windowsHide: true }).status !== 0) {
     if (process.env.CI) assert.fail("CI requires R for project startup coverage");
@@ -17,15 +22,17 @@ test("nested notebook cells retain project profile libraries and notebook-relati
   }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "r-notebook-project-startup-"));
   const project = path.join(root, "project");
+  currentProject = project;
+  currentWorkspaceRoot = root;
   const notebookDirectory = path.join(project, "reports", "nested");
   const library = path.join(project, ".uvr", "library");
-  const document = path.join(notebookDirectory, "report.Rmd");
+  const document = path.join(notebookDirectory, `report.${extension}`);
   const previousProfile = process.env.R_PROFILE_USER;
   const api = {
     workspace: {
-      getWorkspaceFolder: () => ({ uri: { fsPath: project } }),
+      getWorkspaceFolder: () => ({ uri: { fsPath: currentProject } }),
       // The notebook's own folder must win in a multi-root workspace.
-      workspaceFolders: [{ uri: { fsPath: root } }, { uri: { fsPath: project } }],
+      get workspaceFolders() { return [{ uri: { fsPath: currentWorkspaceRoot } }, { uri: { fsPath: currentProject } }]; },
     },
     extensions: { getExtension: () => ({
       isActive: true,
@@ -56,6 +63,14 @@ test("nested notebook cells retain project profile libraries and notebook-relati
       "",
     ].join("\n"));
     await fs.writeFile(path.join(notebookDirectory, "relative.txt"), "notebook-relative");
+    if (extension === "qmd") {
+      await fs.writeFile(path.join(project, "_quarto.yml"), "format:\n  html:\n    toc: true\n");
+      await fs.writeFile(path.join(notebookDirectory, "_metadata.yml"), "author: Inherited author\n");
+    } else {
+      await fs.writeFile(path.join(notebookDirectory, "_output.yml"), "html_document:\n  toc: true\n");
+    }
+    await fs.writeFile(path.join(notebookDirectory, "relative.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle r="3" fill="red"/></svg>');
     const rString = (value: string) => JSON.stringify(value.replaceAll("\\", "/"));
     const source = [
       "```{r}",
@@ -66,16 +81,24 @@ test("nested notebook cells retain project profile libraries and notebook-relati
       'cat("project library and relative paths preserved")',
       "```",
     ].join("\n");
-    await fs.writeFile(document, source);
+    await fs.writeFile(document, "Saved text that the unsaved snapshot replaces.\n");
     delete process.env.R_PROFILE_USER;
     const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), r);
     const result = await bridge.execute(source, document, {
       isCancellationRequested: false,
       onCancellationRequested: () => ({ dispose() {} }),
-    });
+    }, { documentSource: source, documentId: document, cellId: "test" });
     const output = result.outputs.map(item => Buffer.from(item.data).toString()).join("\n");
     assert.equal(result.success, true, output);
     assert.match(output, /project library and relative paths preserved/);
+    const preview = await bridge.renderText([{ token: "TOKEN", source: "# Preview\n\nValue: `r 42`.\n\n![Image](relative.svg)" }],
+      '---\ntitle: Unsaved preview\n---\n\n::: {#preview .r-notebook-markdown-cell}\nTOKEN\n:::\n', document);
+    assert.match(preview, /Unsaved preview/);
+    assert.match(preview, /id="TOC"/);
+    assert.match(preview, /Value: 42/);
+    assert.match(preview, /<svg/);
+    if (extension === "qmd") assert.match(preview, /Inherited author/);
+    assert.equal(await fs.readFile(document, "utf8"), "Saved text that the unsaved snapshot replaces.\n");
   } finally {
     if (previousProfile === undefined) delete process.env.R_PROFILE_USER;
     else process.env.R_PROFILE_USER = previousProfile;

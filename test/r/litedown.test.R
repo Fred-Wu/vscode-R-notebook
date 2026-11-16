@@ -1,21 +1,24 @@
 source(file.path("resources", "r", "execute.R"), local = TRUE)
+r_notebook_load(file.path("resources", "r"))
 r_notebook_math_assets <- normalizePath(file.path("dist", "katex"), winslash = "/", mustWork = TRUE)
 stopifnot(requireNamespace("litedown", quietly = TRUE))
 stopifnot(requireNamespace("rbibutils", quietly = TRUE))
 
-# The complete Rmd path must work without loading rmarkdown or locating Pandoc.
+# Both complete notebook paths must work without loading rmarkdown or locating Pandoc.
 trace(base::loadNamespace, tracer = quote({
   if (identical(package, "rmarkdown") || identical(package, "bookdown")) {
     stop("Unexpected publishing dependency: ", package)
   }
 }), print = FALSE)
 
-run_tests <- function() {
+run_tests <- function(extension) {
+  quarto <- identical(extension, "qmd")
+  format <- if (quarto) r_notebook_quarto else r_notebook_rmd
   root <- tempfile("r-notebook-litedown-test & ")
   dir.create(root)
   on.exit(unlink(root, recursive = TRUE), add = TRUE)
-  document <- file.path(root, "notebook.Rmd")
-  writeLines(c("---", "output: html_document", "params:", "  value: 42", "---"), document)
+  document <- file.path(root, paste0("notebook.", extension))
+  writeLines(c("---", if (quarto) "format: html" else "output: html_document", "params:", "  value: 42", "---"), document)
   env <- new.env(parent = globalenv())
   run <- function(id, code, header = "") {
     directory <- file.path(root, id)
@@ -34,7 +37,7 @@ run_tests <- function() {
   stopifnot(setup$success, identical(env$x, 42L), !exists("params", env, inherits = FALSE))
   result <- run("result", c("x + 1", "warning('hidden warning')", "message('visible message')"))
   stopifnot(result$success, grepl("43", result$html), grepl("PREFIX", result$html),
-    !grepl("hidden warning", result$html), grepl("visible message", result$html))
+    !grepl("hidden warning", result$html), identical(grepl("visible message", result$html), !quarto))
   named <- run("named", "x <- x + 1", " named")
   rerun <- run("named", "x <- x + 1", " named")
   stopifnot(named$success, rerun$success, identical(env$x, 44))
@@ -52,9 +55,11 @@ run_tests <- function() {
     '  knitr::opts_chunk$get("dpi") == 96, knitr::opts_chunk$get("fig.retina") == 2)'
   ))
   stopifnot(defaults$success)
-  writeLines(c("html_document:", "  toc: true", "  toc_depth: 1"), file.path(root, "_output.yml"))
-  stopifnot(identical(r_notebook_rmd_options(r_notebook_metadata(document, env))$toc, TRUE))
-  unlink(file.path(root, "_output.yml"))
+  if (!quarto) {
+    writeLines(c("html_document:", "  toc: true", "  toc_depth: 1"), file.path(root, "_output.yml"))
+    stopifnot(identical(r_notebook_rmd_options(r_notebook_rmd_metadata(document, env))$toc, TRUE))
+    unlink(file.path(root, "_output.yml"))
+  }
   table <- run("table", "data.frame(a=1:100, b=letters[1:100])")
   stopifnot(table$success, grepl("<table", table$html), grepl("80 rows omitted", table$html))
   custom <- run("custom", c(
@@ -82,8 +87,10 @@ run_tests <- function() {
 
   env$show_toc <- TRUE
   writeLines(c("---", 'title: "`r params$value`"', "params:", "  value: 'Live title'",
-    "output:", "  word_document: default", "  html_document:", "    toc: !expr show_toc",
-    "    toc_depth: 2", "    number_sections: true", "---",
+    if (quarto) c("format:", "  docx: default", "  html:", "    toc: !expr show_toc",
+      "    toc-depth: 2", "    number-sections: true") else
+      c("output:", "  word_document: default", "  html_document:", "    toc: !expr show_toc",
+      "    toc_depth: 2", "    number_sections: true"), "---",
     "::: {#first .r-notebook-markdown-cell}", "TOKEN_FIRST", ":::",
     "::: {#second .r-notebook-markdown-cell}", "TOKEN_SECOND", ":::"), document)
   snapshot <- readLines(document)
@@ -92,6 +99,16 @@ run_tests <- function() {
     list(token="TOKEN_FIRST", source=paste(c("# Intro", "", "Value `r x`.", "", "See \\@ref(fig:demo) and \\@ref(intro).[^note]", "", "```r", "stop('literal must not execute')", "```"), collapse="\n")),
     list(token="TOKEN_SECOND", source=paste(c("## More", "", '<p class="caption">(\\#fig:demo) Figure</p>', "", "[^note]: Shared footnote."), collapse="\n"))
   ), auto_unbox=TRUE), cells)
+  if (quarto) {
+    sources <- readLines(cells)
+    sources <- gsub("# Intro", "# Intro {#sec-intro}", sources, fixed=TRUE)
+    sources <- gsub("\\\\@ref(fig:demo)", "@fig-demo", sources, fixed=TRUE)
+    sources <- gsub("\\\\@ref(intro)", "@sec-intro", sources, fixed=TRUE)
+    # Replace the caption placeholder through the parsed JSON to avoid escaping differences.
+    parsed <- jsonlite::fromJSON(paste(sources, collapse="\n"), simplifyVector=FALSE)
+    parsed[[2L]]$source <- sub('<p class="caption">.*?</p>', '<div id="fig-demo" fig-cap="Figure"></div>', parsed[[2L]]$source)
+    writeLines(jsonlite::toJSON(parsed, auto_unbox=TRUE), cells)
+  }
   for (toc in c(TRUE, FALSE)) {
     env$show_toc <- toc
     writeLines(snapshot, document)
@@ -101,7 +118,8 @@ run_tests <- function() {
     html <- paste(readLines(file.path(directory, "result.html")), collapse="\n")
     stopifnot(grepl("Live title", html), identical(grepl('id="TOC"', html), toc),
       grepl('id="first"', html), grepl('id="second"', html), grepl("Value 44", html),
-      grepl('href="#demo">1</a>', html, fixed=TRUE), grepl('href="#intro">1</a>', html, fixed=TRUE),
+      grepl(if (quarto) 'href="#fig-demo">Figure 1</a>' else 'href="#demo">1</a>', html, fixed=TRUE),
+      grepl(if (quarto) 'href="#sec-intro">Section 1</a>' else 'href="#intro">1</a>', html, fixed=TRUE),
       grepl('id="fn-note"', html), grepl("literal must not execute", html),
       !exists("params", env, inherits=FALSE))
   }
@@ -128,5 +146,5 @@ run_tests <- function() {
     !grepl('<script[^>]+src="https?://|<link[^>]+href="https?://', math))
   stopifnot(!"rmarkdown" %in% loadedNamespaces(), !"bookdown" %in% loadedNamespaces())
 }
-tryCatch(run_tests(), finally = untrace(base::loadNamespace))
-cat("R Markdown execution and rendering passed without rmarkdown or bookdown.\n")
+tryCatch({ for (extension in c("Rmd", "qmd")) run_tests(extension) }, finally = untrace(base::loadNamespace))
+cat("R Markdown and Quarto execution and rendering passed without publishing packages.\n")
