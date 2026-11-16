@@ -110,6 +110,10 @@ exports.run = async () => {
     assert.fail(description);
   }
   try {
+    if (process.env.R_NOTEBOOK_RENDER_RICH_ONLY) {
+      await require('./richOutputs.cjs').run({ until, inspect });
+      return;
+    }
     if (process.env.R_NOTEBOOK_RENDER_SIDECAR_ONLY) {
       await require('./sidecar.cjs').run({ until, inspect });
       return;
@@ -226,6 +230,7 @@ exports.run = async () => {
       console.log(`Notebook rendering: ${extension} generated and externally changed PNGs refresh visibly.`);
       await vscode.commands.executeCommand('r-notebook.closeSessionAndNotebook');
     }
+    await require('./richOutputs.cjs').run({ until, inspect });
   } finally {
     for (const connection of connections.values()) connection.close();
   }

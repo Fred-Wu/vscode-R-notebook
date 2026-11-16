@@ -9,7 +9,7 @@ async function main() {
   const suite = process.argv[2] || 'languageService';
   if (!['languageService', 'viewers', 'rendering', 'yamlCompletions'].includes(suite)) throw new Error(`Unknown integration suite: ${suite}`);
   const inspectUI = suite === 'rendering' || suite === 'yamlCompletions';
-  const viewers = suite === 'viewers';
+  const viewers = suite === 'viewers' || process.env.R_NOTEBOOK_TEST_SESS === '1';
   const executable = process.env.VSCODE_EXECUTABLE;
   if (!executable) throw new Error('Set VSCODE_EXECUTABLE to the VS Code executable (Code.exe on Windows).');
   const extensionRoot = process.env.VSCODE_EXTENSIONS_DIR || path.join(os.homedir(), '.vscode', 'extensions');

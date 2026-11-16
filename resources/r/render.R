@@ -146,6 +146,13 @@ r_notebook_require_litedown <- function() {
   }
 }
 
+r_notebook_read_script <- function(path) {
+  # Windows text-mode reads treat a literal Ctrl-Z in JavaScript as EOF.
+  connection <- base::file(path, open = "rb")
+  base::on.exit(base::close(connection))
+  base::paste(base::readLines(connection, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+}
+
 r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = list(), outline = FALSE, format = r_notebook_rmd) {
   r_notebook_require_litedown()
   settings <- format$options(metadata)
@@ -178,7 +185,7 @@ r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = li
           path <- base::gsub(entity, c('&quot;'='"', '&#39;'="'", '&lt;'='<', '&gt;'='>', '&amp;'='&')[[entity]], path, fixed = TRUE)
         }
         if (!base::file.exists(path)) return(base::as.character(litedown::mark(text = tag, options = options)))
-        content <- if (script) base::paste(base::readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n") else {
+        content <- if (script) r_notebook_read_script(path) else {
           embedded <- base::as.character(litedown::mark(
             text = c('---', 'output:', '  html:', '    template: "$css$"', '---', ' '),
             meta = list(css = path), options = options))
@@ -211,7 +218,7 @@ r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = li
         meta = list(css = base::file.path(assets, 'katex.min.css')),
         options = list(embed_resources = TRUE, js_math = FALSE, js_highlight = FALSE)))
       scripts <- base::vapply(base::file.path(assets, c('katex.min.js', 'auto-render.min.js')), function(path) {
-        base::paste(c('<script>', base::readLines(path, warn = FALSE, encoding = "UTF-8"), '</script>'), collapse = "\n")
+        base::paste(c('<script>', r_notebook_read_script(path), '</script>'), collapse = "\n")
       }, base::character(1))
       embedded <- base::paste(c(embedded, scripts), collapse = "\n")
       cached <- list(path = assets, html = embedded)

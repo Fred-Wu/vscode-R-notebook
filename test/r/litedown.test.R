@@ -29,7 +29,9 @@ run_tests <- function(extension) {
     files <- list.files(directory, "^[0-9]+\\.meta$", full.names = TRUE)
     output <- paste(vapply(files, function(file) {
       payload <- sub("^file: ", "", grep("^file: ", readLines(file), value = TRUE))
-      paste(readLines(file.path(directory, payload), warn = FALSE), collapse = "\n")
+      connection <- file(file.path(directory, payload), open = "rb")
+      on.exit(close(connection))
+      paste(readLines(connection, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
     }, character(1)), collapse = "\n")
     list(success = identical(readLines(file.path(directory, "done")), "true"), html = output)
   }
@@ -71,7 +73,10 @@ run_tests <- function(extension) {
   stopifnot(plot$success, grepl("data:image/png;base64,", plot$html, fixed = TRUE))
 
   # Exercise dependency metadata and rich printing with a real htmlwidget.
-  template <- 'var template = \'<h1 id="chp:example">Literal heading</h1><img src="not-an-asset.png">\';'
+  # Plotly contains a literal Ctrl-Z in a JS string. Text-mode reads on Windows
+  # truncate that line, corrupting the embedded script while R still succeeds.
+  template <- paste0('var binaryMarker = "', rawToChar(as.raw(26)), '"; ',
+    'var template = \'<h1 id="chp:example">Literal heading</h1><img src="not-an-asset.png">\';')
   writeLines(c(template, 'HTMLWidgets.widget({name:"probe",type:"output",factory:function(el){return {renderValue:function(x){el.textContent=x.value;},resize:function(){}};}});'), file.path(root, "probe.js"))
   writeLines('.probe { color: rgb(12, 34, 56); }', file.path(root, "probe.css"))
   env$widget_dir <- root

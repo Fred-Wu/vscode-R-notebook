@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix missing Plotly outputs on Windows by preserving embedded JavaScript when reading widget dependencies.
 - Avoid scanning uvr package libraries during notebook language-server startup.
 - Offer to install missing notebook R packages into the session's library at startup.
 - Share knitr execution and litedown rendering between R Markdown and Quarto notebooks, with separate format adapters and no publishing-tool requirement for previews.
