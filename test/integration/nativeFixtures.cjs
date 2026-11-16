@@ -16,6 +16,7 @@ exports.fixtureSource = (extension) => [
   ]),
   "---", "", "An introductory paragraph immediately before the first heading.",
   "# Introduction", "", "This section appears in the table of contents.[^shared]", "",
+  "Inline math $x^2$ and display math $$y^2$$.", "",
   "```text", "`r stop('fenced preview example executed')`", "```", "",
   "    `r stop('indented preview example executed')`", "",
   "````markdown", "```{r}", "stop('nested chunk example executed')", "```", "````", "",
@@ -54,6 +55,7 @@ exports.nativeFixtures = () => {
     }
     const script = [
       'args <- commandArgs(TRUE); source(args[[1L]], local=TRUE)',
+      'r_notebook_math_assets <- normalizePath(file.path(dirname(args[[1L]]), "../../dist/katex"), winslash="/", mustWork=TRUE)',
       'for (directory in list.dirs(args[[2L]], recursive=FALSE, full.names=FALSE)) {',
       '  dir <- file.path(args[[2L]], directory)',
       '  extension <- sub("^[0-9]+-", "", directory)',

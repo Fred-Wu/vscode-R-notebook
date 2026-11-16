@@ -309,6 +309,7 @@ export class RExecutionBridge {
         interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
+          `  bridge$r_notebook_math_assets <- ${rString(path.resolve(path.dirname(this.helperPath), "../../dist/katex"))}`,
           "  bridge$r_notebook_execute(",
           `    chunk_path = ${rString(chunkPath)},`,
           `    document_path = ${rString(documentPath)},`,
@@ -409,6 +410,7 @@ export class RExecutionBridge {
         interruptibleRequest(requestDirectory, [
           "  bridge <- new.env(parent = baseenv())",
           `  base::sys.source(${rString(this.helperPath)}, envir = bridge)`,
+          `  bridge$r_notebook_math_assets <- ${rString(path.resolve(path.dirname(this.helperPath), "../../dist/katex"))}`,
           "  bridge$r_notebook_render_text(",
           `    cells_path = ${rString(cellsPath)},`,
           `    native_document_path = ${rString(snapshotPath)},`,

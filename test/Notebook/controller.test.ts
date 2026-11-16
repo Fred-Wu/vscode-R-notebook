@@ -507,6 +507,42 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     }
   });
 
+  await t.test("resource refresh waits for an active preview without interrupting R", async () => {
+    const c = controller();
+    const document = notebook("markup");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const refreshed: unknown[] = [];
+    applyEdit = async edit => {
+      for (const change of edit.edits) {
+        if (change?.notebookMetadata) Object.assign(document.metadata, change.notebookMetadata);
+      }
+      return true;
+    };
+    c.onDidChangeMarkdownState(value => refreshed.push(value));
+    renderBridge = async token => {
+      started.resolve();
+      await release.promise;
+      assert.equal(token.isCancellationRequested, false);
+    };
+    try {
+      const first = c.renderText(document, "text");
+      await started.promise;
+      const refresh = c.refreshMarkdown(document, false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.deepEqual(refreshed, []);
+      release.resolve();
+      await Promise.all([first, refresh]);
+      assert.deepEqual(refreshed, [document]);
+      assert.equal((metadataUpdates.at(-1) as { rNotebookTextCache: unknown }).rNotebookTextCache, null);
+    } finally {
+      release.resolve();
+      renderBridge = async () => {};
+      applyEdit = async () => true;
+      await c.dispose();
+    }
+  });
+
   for (const { name, source, invalidates } of [
     { name: "static text", source: "---\ntitle: Report\n---\nStatic text.", invalidates: false },
     { name: "embedded image", source: "---\ntitle: Report\n---\n![Latest plot](plot.png)", invalidates: true },

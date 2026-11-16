@@ -209,14 +209,14 @@ for (toc in c(TRUE, FALSE)) {
   outline_html <- paste(readLines(file.path(outline_dir, "result.html"), warn = FALSE), collapse = "\n")
   stopifnot(grepl('class="title', outline_html, fixed = TRUE))
   stopifnot(grepl("Notebook <em>report</em>", outline_html, fixed = TRUE))
-  stopifnot(grepl('class="author">Example Author', outline_html, fixed = TRUE))
-  stopifnot(grepl('class="date">2026-10-17', outline_html, fixed = TRUE))
+  stopifnot(grepl('class="author"><h2>Example Author', outline_html, fixed = TRUE))
+  stopifnot(grepl('class="date"><h3>2026-10-17', outline_html, fixed = TRUE))
   stopifnot(identical(grepl('id="TOC"', outline_html, fixed = TRUE), toc))
   if (toc) {
     stopifnot(grepl('href="#text"', outline_html, fixed = TRUE))
     stopifnot(grepl('href="#details"', outline_html, fixed = TRUE))
     stopifnot(!grepl('href="#deep-section"', outline_html, fixed = TRUE))
-    stopifnot(grepl('class="header-section-number"', outline_html, fixed = TRUE))
+    stopifnot(grepl('class="section-number', outline_html, fixed = TRUE))
   }
 }
 

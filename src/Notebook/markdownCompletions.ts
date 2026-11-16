@@ -272,7 +272,7 @@ export class RNotebookMarkdownCompletionProvider implements
           });
           this.rMarkdownFormats.set(executable, pending);
         }
-        formats = await pending;
+        formats = { ...defaultRMarkdownFormats, ...await pending };
       } catch {
         // Basic header fields and format names also work without a configured R.
       }

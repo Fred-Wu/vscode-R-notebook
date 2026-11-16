@@ -28,7 +28,11 @@ export const defaultRMarkdownFormats: RMarkdownFormats = Object.fromEntries([
   "html_document", "html_notebook", "pdf_document", "word_document", "odt_document",
   "rtf_document", "md_document", "github_document", "ioslides_presentation",
   "slidy_presentation", "beamer_presentation", "powerpoint_presentation",
-].map(name => [name, {}]));
+].map(name => [name, {
+  toc: { description: "Show a table of contents.", values: [true, false] },
+  toc_depth: { description: "Number of heading levels in the table of contents.", values: [1, 2, 3, 4, 5, 6] },
+  number_sections: { description: "Number document sections.", values: [true, false] },
+}]));
 
 export interface YamlCompletionContext {
   parents: string[];
@@ -126,7 +130,6 @@ export function rMarkdownYamlSuggestions(context: YamlCompletionContext, formats
 
 /** Inspect defaults without calling output formats or evaluating their expressions. */
 export const rMarkdownFormatsExpression = String.raw`
-if (!requireNamespace("rmarkdown", quietly=TRUE)) stop("Install rmarkdown for output-format completions")
 result <- list()
 for (pkg in c("rmarkdown", "bookdown")) {
   if (!requireNamespace(pkg, quietly=TRUE)) next

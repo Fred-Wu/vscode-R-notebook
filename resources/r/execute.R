@@ -1,3 +1,5 @@
+r_notebook_math_assets <- NULL
+
 r_notebook_knitr_managers <- function() {
   list(
     opts_chunk = knitr::opts_chunk,
@@ -253,7 +255,7 @@ r_notebook_compact_data_frame_source <- function(source) {
   !function_name %in% c("head", "tail")
 }
 
-r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) {
+r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels, quarto = TRUE) {
   previous_labels <- runtime$cell_labels[[cell_id]]
   if (base::is.null(previous_labels)) {
     previous_labels <- base::character()
@@ -272,10 +274,10 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
     capture$called <- TRUE
     tryCatch({
       r_notebook_apply_session_state(runtime, execution_code)
-      render_context <- utils::getFromNamespace(
+      render_context <- if (quarto) utils::getFromNamespace(
         "render_context",
         "rmarkdown"
-      )()
+      )() else NULL
       render_state <- base::new.env(parent = base::emptyenv())
       render_state$compact_data_frame <- TRUE
       if (base::is.environment(render_context)) {
@@ -285,6 +287,21 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
             compact = render_state$compact_data_frame
           )
         }
+      } else if (!quarto) {
+        knitr::opts_chunk$set(render = function(x, options, ...) {
+          data_frame <- base::inherits(x, "data.frame")
+          custom <- data_frame && base::any(base::vapply(base::setdiff(base::class(x), "data.frame"), function(class) {
+            base::is.function(base::get0(base::paste0("knit_print.", class), envir = knitr::knit_global(), mode = "function")) ||
+              !base::is.null(utils::getS3method("knit_print", class, optional = TRUE, envir = base::asNamespace("knitr")))
+          }, base::logical(1)))
+          if (data_frame && !custom) {
+            r_notebook_compact_data_frame(x, compact = render_state$compact_data_frame)
+          } else {
+            base::do.call(knitr::knit_print, c(list(x = x, options = options), list(...)), envir = knitr::knit_global())
+          }
+        })
+        # Explicit user render options take precedence over the default printer.
+        r_notebook_apply_session_state(runtime, execution_code)
       }
       previous_evaluate <- knitr::knit_hooks$get("evaluate")
       previous_chunk <- knitr::knit_hooks$get("chunk")
@@ -404,8 +421,8 @@ r_notebook_install_knit_capture <- function(runtime, cell_id, generated_labels) 
     base::invisible()
   }
 
-  previous_hooks <- base::getHook("rmarkdown.onKnit")
-  base::setHook("rmarkdown.onKnit", hook, action = "append")
+  previous_hooks <- if (quarto) base::getHook("rmarkdown.onKnit") else NULL
+  if (quarto) base::setHook("rmarkdown.onKnit", hook, action = "append") else hook(NULL)
   list(previous_hooks = previous_hooks, capture = capture)
 }
 
@@ -590,7 +607,304 @@ r_notebook_initialize_runtime <- function(document_path) {
 
 r_notebook_front_matter <- function(document_path) {
   lines <- base::readLines(document_path, warn = FALSE, encoding = "UTF-8")
-  rmarkdown:::partition_yaml_front_matter(lines)$front_matter
+  r_notebook_partition_yaml(lines)$front_matter
+}
+
+# Parsing front matter must not require rmarkdown (including in .Rmd-only installs).
+r_notebook_partition_yaml <- function(lines) {
+  first <- base::which(base::nzchar(base::trimws(lines)))[1L]
+  if (base::is.na(first) || !base::grepl("^---[[:space:]]*$", lines[[first]])) {
+    return(list(front_matter = NULL, body = lines))
+  }
+  ends <- base::which(base::grepl("^(---|[.][.][.])[[:space:]]*$", lines))
+  end <- ends[ends > first][1L]
+  if (base::is.na(end)) return(list(front_matter = NULL, body = lines))
+  list(front_matter = lines[first:end], body = lines[-base::seq_len(end)])
+}
+
+r_notebook_metadata <- function(document_path, evaluation_env = base::globalenv()) {
+  front <- r_notebook_front_matter(document_path)
+  expression <- function(x) base::eval(base::parse(text = x), envir = evaluation_env)
+  read_yaml <- function(text) yaml::yaml.load(base::paste(text, collapse = "\n"),
+    eval.expr = FALSE, handlers = list(expr = expression, r = expression))
+  value <- if (base::length(front) >= 3L) read_yaml(front[-c(1L, base::length(front))]) else list()
+  if (base::is.null(value)) value <- list()
+  if (!base::is.list(value)) base::stop("Notebook YAML must contain named fields.")
+  directory <- base::dirname(document_path)
+  read_config <- function(names) {
+    paths <- base::ifelse(base::grepl("^([A-Za-z]:|[/\\\\])", names), names, base::file.path(directory, names))
+    path <- paths[base::file.exists(paths)][1L]
+    if (base::is.na(path)) list() else read_yaml(base::readLines(path, warn = FALSE, encoding = "UTF-8"))
+  }
+  normalize <- function(output) {
+    if (base::length(output) == 0L) return(list())
+    if (base::is.character(output)) return(stats::setNames(base::rep(list(list()), base::length(output)), output))
+    if (!base::is.list(output)) return(list())
+    if (base::is.null(base::names(output))) return(base::unlist(base::lapply(output, normalize), recursive = FALSE))
+    base::lapply(output, function(options) if (base::is.list(options)) options else list())
+  }
+  merge <- function(defaults, output) {
+    defaults <- normalize(defaults)
+    output <- normalize(output)
+    combined <- utils::modifyList(defaults, output)
+    combined[c(base::names(output), base::setdiff(base::names(defaults), base::names(output)))]
+  }
+  site <- read_config(c("_site.yml", "_site.yaml"))
+  common <- read_config(c(value$output_yaml, "_output.yml", "_output.yaml"))
+  value$output <- merge(merge(site$output, common), value$output)
+  value
+}
+
+r_notebook_with_params <- function(metadata, evaluation_env, action) {
+  if (base::is.null(metadata$params)) return(action())
+  params <- base::lapply(metadata$params, function(param) {
+    if (base::is.list(param) && "value" %in% base::names(param)) param$value else param
+  })
+  had_params <- base::exists("params", envir = evaluation_env, inherits = FALSE)
+  old_params <- if (had_params) base::get("params", envir = evaluation_env)
+  locked <- had_params && base::bindingIsLocked("params", evaluation_env)
+  if (locked) base::stop("Cannot set notebook parameters: 'params' is locked.")
+  base::assign("params", params, envir = evaluation_env)
+  base::lockBinding("params", evaluation_env)
+  base::on.exit({
+    base::unlockBinding("params", evaluation_env)
+    if (had_params) base::assign("params", old_params, envir = evaluation_env)
+    else base::rm("params", envir = evaluation_env)
+  }, add = TRUE)
+  action()
+}
+
+r_notebook_rmd_options <- function(metadata) {
+  output <- metadata$output
+  if (!base::is.list(output) || base::length(output) == 0L) return(list())
+  options <- if (base::is.list(output[[1L]])) output[[1L]] else list()
+  html <- base::which(base::grepl("(^|::)html_(document2?|notebook|vignette)$", base::names(output)))
+  if (base::length(html) && base::is.list(output[[html[[1L]]]])) {
+    options <- utils::modifyList(options, output[[html[[1L]]]])
+  }
+  options
+}
+
+r_notebook_replace_matches <- function(text, pattern, replacement) {
+  positions <- base::gregexpr(pattern, text, perl = TRUE)
+  matches <- base::regmatches(text, positions)[[1L]]
+  if (base::length(matches)) {
+    base::regmatches(text, positions) <- list(replacement(matches))
+  }
+  text
+}
+
+r_notebook_bookdown_markdown <- function(markdown) {
+  protected <- r_notebook_mask_literal_markdown(base::strsplit(markdown, "\n", fixed = TRUE)[[1L]])
+  text <- base::paste(protected$markup, collapse = "\n")
+  literals <- list()
+  text <- r_notebook_replace_matches(text, "(`+)(?:(?!\\1).)*?\\1", function(matches) {
+    base::vapply(matches, function(value) {
+      token <- base::paste0("VSC_R_NOTEBOOK_INLINE_LITERAL_", base::length(literals), "_")
+      while (base::grepl(token, markdown, fixed = TRUE)) token <- base::paste0(token, "X")
+      literals[[token]] <<- value
+      token
+    }, base::character(1))
+  })
+  counters <- c(fig = 0L, tab = 0L)
+  text <- r_notebook_replace_matches(text, '\\(\\\\#((?:fig|tab):[A-Za-z][\\w:.-]*)\\)', function(matches) {
+    base::vapply(matches, function(value) {
+      id <- base::sub('^\\(\\\\#(.*)\\)$', '\\1', value)
+      kind <- base::sub(":.*", "", id)
+      counters[[kind]] <<- counters[[kind]] + 1L
+      base::paste0('<span id="', id, '" class="ref-number-', kind, '">', counters[[kind]], '</span>')
+    }, base::character(1))
+  })
+  text <- base::gsub('\\\\@ref\\(([A-Za-z][\\w:.-]*)\\)', '<a href="#\\1" data-r-notebook-reference="\\1">\\1</a>', text, perl = TRUE)
+  r_notebook_restore_literal_markdown(text, c(protected$originals, literals))
+}
+
+r_notebook_bookdown_html <- function(html) {
+  numbers <- list()
+  captions <- base::regmatches(html, base::gregexpr('<span id="((?:fig|tab):[^"]+)" class="ref-number-[^"]+">([0-9]+)</span>', html, perl = TRUE))[[1L]]
+  for (caption in captions) {
+    id <- base::sub('^<span id="([^"]+)".*$', '\\1', caption)
+    numbers[[id]] <- base::sub('^.*>([0-9]+)</span>$', '\\1', caption)
+  }
+  headings <- base::regmatches(html, base::gregexpr('<h[1-6] id="([^"]+)"[^>]*><span class="section-number[^"]*">([^<]+)</span>', html, perl = TRUE))[[1L]]
+  for (heading in headings) {
+    id <- base::sub('^<h[1-6] id="([^"]+)".*$', '\\1', heading)
+    numbers[[id]] <- base::sub('^.*<span[^>]*>([^<]+)</span>$', '\\1', heading)
+  }
+  html <- r_notebook_replace_matches(html, '<a href="#[^"]+" data-r-notebook-reference="([^"]+)">[^<]+</a>', function(matches) {
+    base::vapply(matches, function(value) {
+      id <- base::sub('^.*data-r-notebook-reference="([^"]+)".*$', '\\1', value)
+      number <- numbers[[id]]
+      if (base::is.null(number)) return(value)
+      target <- base::sub("^(fig|tab):", "", id)
+      base::paste0('<a href="#', target, '">', number, '</a>')
+    }, base::character(1))
+  })
+  html
+}
+
+# Keep ordinary R Markdown heading links working with litedown's prefixed IDs.
+# Explicit IDs remain untouched; generated IDs and their TOC destinations agree.
+r_notebook_rmd_heading_ids <- function(html, markdown) {
+  source <- r_notebook_mask_literal_markdown(base::strsplit(markdown, "\n", fixed = TRUE)[[1L]])$markup
+  source <- base::paste(source, collapse = "\n")
+  source <- base::gsub("(`+)(?:(?!\\1).)*?\\1", "", source, perl = TRUE)
+  explicit <- base::regmatches(source, base::gregexpr('\\{#[^[:space:]}"]+', source, perl = TRUE))[[1L]]
+  explicit <- base::sub("^\\{#", "", explicit)
+  used <- explicit
+  replacements <- list()
+  html <- r_notebook_replace_matches(html, '<h[1-6] id="(?:chp|sec):[^"]+"[^>]*>.*?</h[1-6]>', function(headings) {
+    base::vapply(headings, function(heading) {
+      old <- base::sub('^<h[1-6] id="([^"]+)".*$', '\\1', heading)
+      if (old %in% explicit) return(heading)
+      label <- base::sub('^<h[1-6][^>]*>(.*?)</h[1-6]>$', '\\1', heading)
+      label <- base::gsub('<span class="section-number[^"]*">.*?</span>[ ]*', '', label)
+      label <- base::as.character(litedown::mark(text = label, output = "text"))
+      slug <- base::tolower(base::trimws(label))
+      slug <- base::gsub("[^[:alnum:]_ .-]", "", slug)
+      slug <- base::gsub("[[:space:]]+", "-", slug)
+      slug <- base::sub("^[^[:alpha:]]*", "", slug)
+      if (!base::nzchar(slug)) slug <- "section"
+      id <- slug
+      suffix <- 0L
+      while (id %in% used) { suffix <- suffix + 1L; id <- base::paste0(slug, "-", suffix) }
+      used <<- c(used, id)
+      replacements[[old]] <<- id
+      base::sub(base::paste0('id="', old, '"'), base::paste0('id="', id, '"'), heading, fixed = TRUE)
+    }, base::character(1))
+  })
+  for (old in base::names(replacements)) {
+    html <- base::gsub(base::paste0('href="#', old, '"'), base::paste0('href="#', replacements[[old]], '"'), html, fixed = TRUE)
+  }
+  html
+}
+
+r_notebook_require_litedown <- function() {
+  if (!base::requireNamespace("litedown", quietly = TRUE) || utils::packageVersion("litedown") < "1.0") {
+    base::stop("Install litedown 1.0 or newer to render R Markdown notebooks.")
+  }
+}
+
+r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = list(), outline = FALSE) {
+  r_notebook_require_litedown()
+  settings <- r_notebook_rmd_options(metadata)
+  markdown <- r_notebook_bookdown_markdown(markdown)
+  # Passing only preview metadata avoids loading publishing formats or templates.
+  meta <- metadata[base::intersect(base::names(metadata), c("title", "subtitle", "author", "date", "bibliography"))]
+  meta["css"] <- list(base::character())
+  meta["js"] <- list(base::character())
+  options <- list(toc = FALSE, number_sections = outline && base::isTRUE(settings$number_sections),
+    cross_refs = FALSE, js_math = FALSE, js_highlight = FALSE, embed_resources = "all", embed_cleanup = FALSE)
+  dependencies <- base::Filter(function(x) base::inherits(x, "html_dependency"), knit_meta)
+  header <- ""
+  if (base::length(dependencies)) {
+    header <- htmltools::renderDependencies(htmltools::resolveDependencies(dependencies),
+      srcType = "file", encodeFunc = base::identity)
+    header <- base::gsub('<link href="([^"]+)" rel="stylesheet"',
+      '<link rel="stylesheet" href="\\1"', header)
+    # htmltools escapes attribute values; litedown expects filesystem paths.
+    # Embed through its metadata API so characters such as & and quotes never
+    # become part of a filename or break an intermediate HTML attribute.
+    header <- r_notebook_replace_matches(header,
+      '<script[^>]* src="[^"]+"[^>]*>\\s*</script>|<link[^>]* rel="stylesheet"[^>]*>',
+      function(tags) base::vapply(tags, function(tag) {
+        script <- base::startsWith(tag, "<script")
+        attribute <- if (script) "src" else "href"
+        pattern <- base::paste0(' ', attribute, '="([^"]+)"')
+        path <- base::sub(base::paste0('.*', pattern, '.*'), '\\1', tag)
+        for (entity in c('&quot;', '&#39;', '&lt;', '&gt;', '&amp;')) {
+          path <- base::gsub(entity, c('&quot;'='"', '&#39;'="'", '&lt;'='<', '&gt;'='>', '&amp;'='&')[[entity]], path, fixed = TRUE)
+        }
+        if (!base::file.exists(path)) return(base::as.character(litedown::mark(text = tag, options = options)))
+        content <- if (script) base::paste(base::readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n") else {
+          embedded <- base::as.character(litedown::mark(
+            text = c('---', 'output:', '  html:', '    template: "$css$"', '---', ' '),
+            meta = list(css = path), options = options))
+          base::substr(embedded, base::regexpr('>', embedded)[[1L]] + 1L,
+            base::regexpr('</[^>]+>$', embedded)[[1L]] - 1L)
+        }
+        opening <- base::sub(pattern, '', base::sub('>.*$', '>', tag))
+        if (!script) opening <- base::sub('^<link', '<style', base::sub(' rel="stylesheet"', '', opening, fixed = TRUE))
+        base::paste0(opening, '\n', content, '\n</', if (script) 'script' else 'style', '>')
+      }, base::character(1)))
+  }
+  # Pass only evaluated preview metadata, never the publishing configuration.
+  bibliography <- if (!base::is.null(meta$bibliography)) {
+    yaml::as.yaml(list(bibliography = meta$bibliography))
+  } else base::character()
+  text <- c("---", "output:", "  html:", "    template: true", bibliography, "---", markdown)
+  html <- base::as.character(litedown::mark(text = text, output = "html", options = options, meta = meta))
+  math_initializer <- ""
+  prose <- base::gsub('(?s)<(pre|code|script)[ >].*?</\\1>', '', html, perl = TRUE)
+  if (base::grepl('\\(', prose, fixed = TRUE) || base::grepl('$$', prose, fixed = TRUE) ||
+      base::grepl('\\begin{', prose, fixed = TRUE)) {
+    assets <- r_notebook_math_assets
+    if (base::is.null(assets) || !base::file.exists(base::file.path(assets, "katex.min.js"))) {
+      base::stop("The notebook's bundled math assets are missing. Reinstall the extension.")
+    }
+    cached <- base::getOption("vsc.r.notebook.math")
+    if (!base::identical(cached$path, assets)) {
+      embedded <- base::as.character(litedown::mark(
+        text = c('---', 'output:', '  html:', '    template: "$css$"', '---', ' '),
+        meta = list(css = base::file.path(assets, 'katex.min.css')),
+        options = list(embed_resources = TRUE, js_math = FALSE, js_highlight = FALSE)))
+      scripts <- base::vapply(base::file.path(assets, c('katex.min.js', 'auto-render.min.js')), function(path) {
+        base::paste(c('<script>', base::readLines(path, warn = FALSE, encoding = "UTF-8"), '</script>'), collapse = "\n")
+      }, base::character(1))
+      embedded <- base::paste(c(embedded, scripts), collapse = "\n")
+      cached <- list(path = assets, html = embedded)
+      base::options(vsc.r.notebook.math = cached)
+    }
+    header <- base::paste(header, cached$html, sep = "\n")
+    # Standalone cell outputs initialize themselves. Markdown previews initialize
+    # each inserted cell in the renderer, including cells revealed after scrolling.
+    math_initializer <- base::paste0('<script data-r-notebook-math>',
+      'if(window.renderMathInElement)window.renderMathInElement(document.body,{throwOnError:false});',
+      '</script>')
+  }
+  html <- r_notebook_rmd_heading_ids(html, markdown)
+  html <- r_notebook_bookdown_html(html)
+  # Match the renderer's existing title/author/date extraction contract.
+  html <- base::sub('<header class="frontmatter">', '<header id="header" class="frontmatter">', html, fixed = TRUE)
+  if (outline && base::isTRUE(settings$toc)) {
+    headings <- base::regmatches(html, base::gregexpr('<h[1-6] id="[^"]+"[^>]*>.*?</h[1-6]>', html, perl = TRUE))[[1L]]
+    depth <- if (base::is.numeric(settings$toc_depth)) settings$toc_depth else 3L
+    headings <- headings[base::as.integer(base::substr(headings, 3L, 3L)) <= depth &
+      !base::grepl('class="[^"]*\\bunlisted\\b', headings, perl = TRUE)]
+    if (base::length(headings)) {
+      levels <- base::as.integer(base::substr(headings, 3L, 3L))
+      levels <- levels - base::min(levels)
+      # A jump from h1 to h4 still represents one nested TOC list.
+      if (base::length(levels) > 1L) for (i in 2L:base::length(levels)) {
+        levels[[i]] <- base::min(levels[[i]], levels[[i - 1L]] + 1L)
+      }
+      headings <- base::gsub('<a\\b[^>]*>|</a>', '', headings, perl = TRUE)
+      links <- base::sub('^<h[1-6] id="([^"]+)"[^>]*>(.*?)</h[1-6]>$', '<a href="#\\1">\\2</a>', headings)
+      toc <- litedown::mark(text = base::paste0(base::strrep("  ", levels), "- ", links),
+        options = list(auto_identifiers = FALSE, js_highlight = FALSE))
+      html <- base::sub("<main>", base::paste0('<nav id="TOC">', toc, '</nav>\n<main>'), html, fixed = TRUE)
+    }
+  }
+  # Insert assets after all document transformations. JavaScript strings can
+  # contain HTML tags and heading IDs that must remain unchanged.
+  if (base::nzchar(header)) html <- base::sub('</head>', base::paste0(header, '\n</head>'), html, fixed = TRUE)
+  if (base::nzchar(math_initializer)) html <- base::sub('</body>', base::paste0(math_initializer, '\n</body>'), html, fixed = TRUE)
+  html
+}
+
+r_notebook_knit_rmd <- function(chunk_path, document_path, execution_dir, evaluation_env) {
+  metadata <- r_notebook_metadata(document_path, evaluation_env)
+  old_meta <- knitr::knit_meta(clean = TRUE)
+  base::on.exit({
+    knitr::knit_meta(clean = TRUE)
+    knitr::knit_meta_add(old_meta)
+  }, add = TRUE)
+  r_notebook_with_params(metadata, evaluation_env, function() {
+    markdown <- knitr::knit(input = chunk_path, quiet = TRUE, envir = evaluation_env,
+      output = base::file.path(execution_dir, "cell.md"))
+    list(markdown = base::paste(base::readLines(markdown, warn = FALSE, encoding = "UTF-8"), collapse = "\n"),
+      knit_meta = knitr::knit_meta(clean = TRUE))
+  })
 }
 
 r_notebook_align_leading_chunk_options <- function(lines) {
@@ -633,7 +947,7 @@ r_notebook_align_leading_chunk_options <- function(lines) {
 
 r_notebook_without_front_matter <- function(markdown, context_marker) {
   lines <- base::strsplit(markdown, "\n", fixed = TRUE)[[1L]]
-  parts <- rmarkdown:::partition_yaml_front_matter(lines)
+  parts <- r_notebook_partition_yaml(lines)
   if (
     !base::is.null(parts$front_matter) &&
       context_marker %in% parts$front_matter
@@ -641,85 +955,6 @@ r_notebook_without_front_matter <- function(markdown, context_marker) {
     return(base::paste(parts$body, collapse = "\n"))
   }
   markdown
-}
-
-r_notebook_rmarkdown_html_format <- function(document_path, document_outline = FALSE) {
-  if (
-    !base::requireNamespace("rmarkdown", quietly = TRUE) ||
-      !rmarkdown::pandoc_available(error = FALSE)
-  ) {
-    base::stop("The R package 'rmarkdown' and Pandoc are required to render R Markdown.")
-  }
-
-  # Resolve YAML options without loading the publishing format (for example Word).
-  # An explicit HTML configuration wins even when it is not the first output.
-  previous_directory <- base::setwd(base::dirname(document_path))
-  base::on.exit(base::setwd(previous_directory), add = TRUE)
-  input_lines <- base::readLines(base::basename(document_path), warn = FALSE, encoding = "UTF-8")
-  resolve_format <- utils::getFromNamespace("output_format_from_yaml_front_matter", "rmarkdown")
-  configured_format <- resolve_format(input_lines)
-  configured_output <- configured_format$name
-  uses_bookdown <- base::grepl("^bookdown::", configured_output)
-  html_format <- resolve_format(
-    input_lines,
-    output_format_name = if (uses_bookdown) "bookdown::html_document2" else "html_document"
-  )
-  configured_format$options <- utils::modifyList(configured_format$options, html_format$options)
-  if (
-    uses_bookdown &&
-      !base::requireNamespace("bookdown", quietly = TRUE)
-  ) {
-    base::stop("The R package 'bookdown' is required by this R Markdown output format.")
-  }
-
-  format_options <- list(
-    self_contained = TRUE,
-    theme = NULL,
-    highlight = NULL,
-    # Match notebook Markdown headings even directly after a paragraph.
-    md_extensions = if (base::isTRUE(document_outline)) "-blank_before_header" else NULL,
-    toc = base::isTRUE(document_outline) && base::isTRUE(configured_format$options$toc),
-    toc_depth = if (base::is.numeric(configured_format$options$toc_depth)) {
-      configured_format$options$toc_depth
-    } else 3L,
-    number_sections = base::isTRUE(document_outline) &&
-      base::isTRUE(configured_format$options$number_sections)
-  )
-  format <- if (uses_bookdown) {
-    base::do.call(bookdown::html_document2, format_options)
-  } else {
-    base::do.call(rmarkdown::html_document, format_options)
-  }
-
-  format$knitr$opts_chunk$comment <- ""
-  native_pre_processor <- format$pre_processor
-  format$pre_processor <- function(...) {
-    c(
-      if (base::is.function(native_pre_processor)) {
-        native_pre_processor(...)
-      } else {
-        base::character()
-      },
-      "--mathml"
-    )
-  }
-  format$knitr$opts_chunk$fig.id <- function(options) {
-    label <- options[["label"]]
-    figure_index <- options[["fig.cur"]]
-    if (
-      !base::is.character(label) ||
-        base::length(label) != 1L ||
-        !base::grepl("^[A-Za-z][A-Za-z0-9_.:-]*$", label) ||
-        (
-          !base::is.null(figure_index) &&
-            !base::identical(base::as.integer(figure_index), 1L)
-        )
-    ) {
-      return("")
-    }
-    base::paste0('id="', label, '"')
-  }
-  format
 }
 
 r_notebook_quarto_preview_metadata <- function(document_path) {
@@ -971,29 +1206,6 @@ r_notebook_render_html <- function(
   ), collapse = "\n")
 }
 
-r_notebook_render_rmarkdown_html <- function(
-  result,
-  execution_dir,
-  document_path
-) {
-  markdown_path <- base::file.path(execution_dir, "notebook-output.md")
-  base::writeLines(result$markdown, markdown_path, useBytes = TRUE)
-  rendered_path <- rmarkdown::render(
-    input = markdown_path,
-    output_format = r_notebook_rmarkdown_html_format(document_path),
-    output_file = "notebook-output.html",
-    output_dir = execution_dir,
-    knit_meta = result$knit_meta,
-    clean = TRUE,
-    quiet = TRUE
-  )
-  base::paste(base::readLines(
-    rendered_path,
-    warn = FALSE,
-    encoding = "UTF-8"
-  ), collapse = "\n")
-}
-
 r_notebook_mask_literal_markdown <- function(
   markup,
   token_prefix = "VSC_R_NOTEBOOK_FENCED_LINE_"
@@ -1194,39 +1406,38 @@ r_notebook_render_text <- function(
     base::on.exit(base::setwd(previous_directory), add = TRUE)
 
     extension <- base::tolower(tools::file_ext(native_document_path))
+    if (base::identical(extension, "rmd")) r_notebook_require_litedown()
     cells <- jsonlite::fromJSON(cells_path, simplifyVector = FALSE)
     document <- base::paste(base::readLines(
       native_document_path,
       warn = FALSE,
       encoding = "UTF-8"
     ), collapse = "\n")
-    literal_lines <- list()
-    for (cell in cells) {
-      rendered <- if (base::identical(extension, "qmd")) {
-        r_notebook_inline_markdown(
-          base::strsplit(cell$source, "\n", fixed = TRUE)[[1L]],
-          evaluation_env
-        )
-      } else {
-        # Keep knitr's normal R Markdown evaluation (including YAML/params),
-        # but never expose literal examples to its inline or chunk parser.
-        protected <- r_notebook_mask_literal_markdown(
-          base::strsplit(cell$source, "\n", fixed = TRUE)[[1L]],
-          token_prefix = base::paste0(cell$token, "_LITERAL_")
-        )
-        literal_lines <- c(literal_lines, protected$originals)
-        base::paste(protected$markup, collapse = "\n")
+    metadata <- if (base::identical(extension, "rmd")) r_notebook_metadata(native_document_path, evaluation_env) else list()
+    preview <- r_notebook_with_params(metadata, evaluation_env, function() {
+      for (field in base::intersect(base::names(metadata), c("title", "subtitle", "author", "date"))) {
+        if (base::is.character(metadata[[field]])) {
+          metadata[[field]] <- base::vapply(metadata[[field]], function(value) {
+            r_notebook_inline_markdown(value, evaluation_env)
+          }, base::character(1))
+        }
       }
-      parts <- base::strsplit(document, cell$token, fixed = TRUE)[[1L]]
-      if (base::length(parts) != 2L) {
-        base::stop("The native text snapshot contains an invalid cell boundary.")
+      for (cell in cells) {
+        rendered <- r_notebook_inline_markdown(
+          base::strsplit(cell$source, "\n", fixed = TRUE)[[1L]], evaluation_env)
+        parts <- base::strsplit(document, cell$token, fixed = TRUE)[[1L]]
+        if (base::length(parts) != 2L) {
+          base::stop("The native text snapshot contains an invalid cell boundary.")
+        }
+        document <- base::paste0(parts[[1L]], rendered, parts[[2L]])
       }
-      document <- base::paste0(parts[[1L]], rendered, parts[[2L]])
-    }
+      list(document = document, metadata = metadata)
+    })
+    document <- preview$document
+    metadata <- preview$metadata
     base::writeLines(document, native_document_path, useBytes = TRUE)
-    toc_filter <- r_notebook_toc_filter(output_dir)
-
     if (base::identical(extension, "qmd")) {
+      toc_filter <- r_notebook_toc_filter(output_dir)
       quarto <- r_notebook_quarto_executable(quarto_executable)
       base::setwd(base::dirname(native_document_path))
       quarto_html_path <- base::file.path(output_dir, "quarto-text.html")
@@ -1282,45 +1493,8 @@ r_notebook_render_text <- function(
         encoding = "UTF-8"
       ), collapse = "\n")
     } else {
-      html_format <- r_notebook_rmarkdown_html_format(native_document_path, document_outline = TRUE)
-      html_format$pandoc$args <- c(html_format$pandoc$args, "--lua-filter", toc_filter)
-      if (base::length(literal_lines) > 0L) {
-        native_pre_processor <- html_format$pre_processor
-        html_format$pre_processor <- function(metadata, input_file, ...) {
-          # This receives the knitted Markdown, immediately before Pandoc. Restore
-          # examples here so they are rendered verbatim and cannot be evaluated.
-          knitted <- base::paste(base::readLines(
-            input_file, warn = FALSE, encoding = "UTF-8"
-          ), collapse = "\n")
-          base::writeLines(
-            r_notebook_restore_literal_markdown(knitted, literal_lines),
-            input_file, useBytes = TRUE
-          )
-          native_pre_processor(metadata, input_file, ...)
-        }
-      }
-      rendered_path <- rmarkdown::render(
-        input = native_document_path,
-        output_format = html_format,
-        output_file = "result.html",
-        output_dir = output_dir,
-        intermediates_dir = output_dir,
-        envir = evaluation_env,
-        knit_root_dir = working_dir,
-        clean = TRUE,
-        quiet = TRUE
-      )
-      html <- base::paste(base::readLines(
-        rendered_path,
-        warn = FALSE,
-        encoding = "UTF-8"
-      ), collapse = "\n")
-      html <- base::gsub(
-        'href="#(?:fig|tab):([^"]+)"',
-        'href="#\\1"',
-        html,
-        perl = TRUE
-      )
+      body <- r_notebook_partition_yaml(base::strsplit(document, "\n", fixed = TRUE)[[1L]])$body
+      html <- r_notebook_litedown_html(base::paste(body, collapse = "\n"), metadata, outline = TRUE)
     }
     html <- r_notebook_prepare_html(
       html,
@@ -1392,8 +1566,10 @@ r_notebook_execute <- function(
     if (!base::requireNamespace("knitr", quietly = TRUE)) {
       base::stop("The R package 'knitr' is required for native notebook execution.")
     }
-    if (!base::requireNamespace("rmarkdown", quietly = TRUE)) {
-      base::stop("The R package 'rmarkdown' is required for native notebook execution.")
+    extension <- base::tolower(tools::file_ext(document_path))
+    if (base::identical(extension, "rmd")) r_notebook_require_litedown()
+    if (extension == "qmd" && !base::requireNamespace("rmarkdown", quietly = TRUE)) {
+      base::stop("The R package 'rmarkdown' is required for Quarto execution.")
     }
     if (utils::packageVersion("knitr") < "1.44") {
       base::stop("Native R Markdown and Quarto cell options require knitr 1.44 or newer.")
@@ -1436,31 +1612,28 @@ r_notebook_execute <- function(
     if (!base::dir.exists(execution_dir) && !base::dir.create(execution_dir, recursive = TRUE)) {
       base::stop("Could not create the cell execution directory.")
     }
-    extension <- base::tolower(tools::file_ext(document_path))
     execution_path <- base::file.path(
       execution_dir,
       if (base::identical(extension, "qmd")) "cell.qmd" else "cell.rmd"
     )
 
-    front_matter <- r_notebook_front_matter(native_document_path)
     context_marker <- base::paste0("# vsc-r-notebook-context: ", cell_key)
-    if (base::length(front_matter) > 1L) {
-      front_matter <- base::append(
-        front_matter,
-        context_marker,
-        after = base::length(front_matter) - 1L
-      )
+    if (base::identical(extension, "qmd")) {
+      front_matter <- r_notebook_front_matter(native_document_path)
+      if (base::length(front_matter) > 1L) {
+        front_matter <- base::append(front_matter, context_marker, after = base::length(front_matter) - 1L)
+      }
     }
     chunk_lines <- r_notebook_align_leading_chunk_options(base::readLines(
       chunk_path,
       warn = FALSE,
       encoding = "UTF-8"
     ))
-    execution_lines <- c(
+    execution_lines <- if (base::identical(extension, "qmd")) c(
       front_matter,
       if (base::length(front_matter)) "" else NULL,
       chunk_lines
-    )
+    ) else chunk_lines
     base::writeLines(execution_lines, execution_path, useBytes = TRUE)
 
     generated_labels <- base::new.env(parent = base::emptyenv())
@@ -1481,12 +1654,26 @@ r_notebook_execute <- function(
       ns = "knitr"
     ), add = TRUE)
 
+    if (base::identical(extension, "rmd")) {
+      knitr::render_markdown()
+      knitr::opts_knit$set(rmarkdown.pandoc.to = "html", root.dir = working_dir, output.dir = execution_dir)
+      knitr::opts_chunk$set(comment = "", dev = "png", dpi = 96, fig.width = 7,
+        fig.height = 5, fig.retina = 2, fig.path = base::paste0(execution_dir, "/figure/"))
+      knitr::opts_chunk$set(fig.id = function(options) {
+        label <- options$label
+        if (!base::is.character(label) || base::length(label) != 1L ||
+            !base::grepl("^[A-Za-z][A-Za-z0-9_.:-]*$", label) ||
+            (!base::is.null(options$fig.cur) && options$fig.cur != 1L)) return("")
+        base::paste0('id="', label, '"')
+      })
+    }
     capture <- r_notebook_install_knit_capture(
       runtime,
       cell_id,
-      generated_labels
+      generated_labels,
+      quarto = base::identical(extension, "qmd")
     )
-    base::on.exit(base::setHook(
+    if (base::identical(extension, "qmd")) base::on.exit(base::setHook(
       "rmarkdown.onKnit",
       capture$previous_hooks,
       action = "replace"
@@ -1564,33 +1751,7 @@ r_notebook_execute <- function(
       )
       result$filters <- c(quarto$format$pandoc$filters, result$filters)
     } else {
-      render_output <- rmarkdown::render(
-        input = execution_path,
-        output_format = r_notebook_rmarkdown_html_format(
-          native_document_path
-        ),
-        knit_root_dir = working_dir,
-        run_pandoc = FALSE,
-        envir = evaluation_env,
-        clean = FALSE,
-        quiet = TRUE
-      )
-      markdown_path <- render_output
-      if (!base::file.exists(markdown_path)) {
-        markdown_path <- base::file.path(execution_dir, render_output)
-      }
-      markdown <- base::paste(base::readLines(
-        markdown_path,
-        warn = FALSE,
-        encoding = "UTF-8"
-      ), collapse = "\n")
-      result <- list(
-        markdown = r_notebook_without_front_matter(
-          markdown,
-          context_marker
-        ),
-        knit_meta = base::attr(render_output, "knit_meta")
-      )
+      result <- r_notebook_knit_rmd(execution_path, native_document_path, execution_dir, evaluation_env)
     }
 
     if (!base::is.null(capture$capture$error)) {
@@ -1656,11 +1817,9 @@ r_notebook_execute <- function(
           presentation_resource_dirs
         )
       } else {
-        html <- r_notebook_render_rmarkdown_html(
-          result,
-          execution_dir,
-          native_document_path
-        )
+        previous_directory <- base::setwd(working_dir)
+        base::on.exit(base::setwd(previous_directory), add = TRUE)
+        html <- r_notebook_litedown_html(result$markdown, knit_meta = result$knit_meta)
       }
     }
     if (!base::is.null(html) && base::nzchar(base::trimws(html))) {

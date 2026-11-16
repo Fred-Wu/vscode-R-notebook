@@ -589,10 +589,13 @@ export class RNotebookController implements vscode.Disposable {
     return this.attachment.restoreAfterConsole();
   }
 
-  async refreshMarkdown(notebook: vscode.NotebookDocument): Promise<void> {
+  async refreshMarkdown(notebook: vscode.NotebookDocument, interrupt = true): Promise<void> {
     const pending = this.sessions.get(notebook.uri.toString())
       ?.pendingTextRender;
-    pending?.cancellation.cancel();
+    // Resource watchers can fire just as a fast render finishes. Let it drain:
+    // a delayed OS interrupt can otherwise arrive after R has returned to its
+    // input loop and discard the following preview request.
+    if (interrupt) pending?.cancellation.cancel();
     await pending?.promise.catch(() => undefined);
     await this.updateNativeTextCache(notebook, undefined);
     this.markdownStateChanged.fire(notebook);

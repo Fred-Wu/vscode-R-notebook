@@ -379,6 +379,12 @@ async function applyResponse(response: RenderResponse): Promise<void> {
         source.remove();
       }
     }
+    const math = (globalThis as typeof globalThis & {
+      renderMathInElement?: (element: HTMLElement, options: { throwOnError: boolean }) => void;
+    }).renderMathInElement;
+    if (nativeDocument.querySelector("script[data-r-notebook-math]")) {
+      math?.(element, { throwOnError: false });
+    }
   }
 }
 

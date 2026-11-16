@@ -42,7 +42,7 @@ jobs:
           test -n "${pandoc}"
           echo "$(dirname "${pandoc}")" >> "${GITHUB_PATH}"
       - name: Install R test dependencies
-        run: Rscript -e "install.packages(c('knitr', 'rmarkdown', 'ps'))"
+        run: Rscript -e "install.packages(c('knitr', 'litedown', 'rbibutils', 'htmlwidgets', 'rmarkdown', 'ps'))"
       - name: Verify R Markdown can use Pandoc
         run: Rscript -e "stopifnot(rmarkdown::pandoc_available())"
       - name: Install dependencies

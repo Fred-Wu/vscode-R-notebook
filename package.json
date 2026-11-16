@@ -313,7 +313,7 @@
     "test:integration:viewers": "npm run compile && node scripts/test-integration.js viewers",
     "test:integration:rendering": "npm run compile && node scripts/test-integration.js rendering",
     "test:integration:yaml": "npm run compile && node scripts/test-integration.js yamlCompletions",
-    "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R",
+    "test:r": "Rscript test/r/bridge.test.R && Rscript test/r/options.test.R && Rscript test/r/litedown.test.R",
     "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package:extension": "npm run check-types && node esbuild.js --production",
@@ -333,6 +333,7 @@
     "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
     "js-yaml": "^4.3.2",
+    "katex": "0.19.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vscode-languageclient": "^9.0.1"

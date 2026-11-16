@@ -246,7 +246,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.notebookDocuments.forEach((notebook) => {
       markdownCompletions.prepareQuarto(notebook);
       if (notebook.notebookType === NOTEBOOK_TYPE) {
-        void controller.refreshMarkdown(notebook).catch((error: unknown) => {
+        void controller.refreshMarkdown(notebook, false).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           output.appendLine(`[Markdown] Could not refresh YAML changes: ${message}`);
         });
@@ -271,7 +271,7 @@ export function activate(context: vscode.ExtensionContext): void {
           ? quartoProjectReferencesDependency(notebook.uri.fsPath, uri.fsPath)
           : Promise.resolve(false);
       void projectMatch.then((matched) =>
-        matched ? controller.refreshMarkdown(notebook) : undefined
+        matched ? controller.refreshMarkdown(notebook, false) : undefined
       ).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[Markdown] Could not refresh dependent resources: ${message}`);
