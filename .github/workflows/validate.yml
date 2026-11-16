@@ -35,7 +35,7 @@ jobs:
         uses: quarto-dev/quarto-actions/setup@v2
       # rmarkdown is only used to test optional publishing-format completions.
       - name: Install R test dependencies
-        run: Rscript -e "install.packages(c('knitr', 'litedown', 'rbibutils', 'htmlwidgets', 'rmarkdown', 'ps'))"
+        run: Rscript -e "install.packages(c('knitr', 'litedown', 'rbibutils', 'htmlwidgets', 'rmarkdown', 'ps', 'languageserver'))"
       - name: Install dependencies
         run: npm ci
       - name: Compile
