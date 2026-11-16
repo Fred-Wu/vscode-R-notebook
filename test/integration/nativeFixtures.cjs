@@ -14,7 +14,7 @@ exports.fixtureSource = (extension) => [
   ] : [
     "output:", "  word_document: default", "  html_document:", "    toc: true", "    toc_depth: 2",
   ]),
-  "---", "", "An introductory paragraph immediately before the first heading.",
+  "---", "", "## {.tabset}", "", "An introductory paragraph immediately before the first named heading.",
   "# Introduction", "", "This section appears in the table of contents.[^shared]", "",
   "Inline math $x^2$ and display math $$y^2$$.", "",
   "```text", "`r stop('fenced preview example executed')`", "```", "",
@@ -22,7 +22,7 @@ exports.fixtureSource = (extension) => [
   "````markdown", "```{r}", "stop('nested chunk example executed')", "```", "````", "",
   "Live value: `r { notebook_preview_count <- get0('notebook_preview_count', ifnotfound=0L) + 1L; 42L }`.", "",
   "```{r}", "mean(c(2, 4, 6))", "```", "",
-  "# Results", "", "The code cell prints 4 when run.[^shared]", "",
+  "# Results {.tabset}", "", "The code cell prints 4 when run.[^shared]", "",
   "[^shared]: A shared native footnote.", "",
   "~~~text", "`r stop('second cell example executed')`", "~~~", "",
   "Second live value: `r { notebook_preview_count <- notebook_preview_count + 1L; 43L }`.", "",

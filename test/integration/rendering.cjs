@@ -149,7 +149,8 @@ exports.run = async () => {
       const editor = await vscode.window.showNotebookDocument(notebook, { preview: false });
       await until(async () => (await inspect(`
         return all('[data-r-notebook-toc]').some(toc => toc.getBoundingClientRect().height > 0 &&
-          toc.innerText.includes('Introduction') && toc.innerText.includes('Distant heading'));
+          toc.innerText.includes('Introduction') && toc.innerText.includes('Distant heading') &&
+          !toc.innerText.includes('{.tabset}') && !toc.querySelector('a[href="#section"]'));
       `)).some(Boolean), `${extension}: no visible TOC in the live notebook`);
       assert.ok((await inspect(`return all('.r-notebook-markdown-cell').every(cell =>
         getComputedStyle(cell).backgroundColor === 'rgba(0, 0, 0, 0)' &&

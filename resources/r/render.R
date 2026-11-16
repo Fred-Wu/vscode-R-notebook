@@ -114,7 +114,7 @@ r_notebook_heading_ids <- function(html, markdown) {
   explicit <- base::sub("^\\{#", "", explicit)
   used <- explicit
   replacements <- list()
-  html <- r_notebook_replace_matches(html, '<h[1-6] id="(?:chp|sec):[^"]+"[^>]*>.*?</h[1-6]>', function(headings) {
+  html <- r_notebook_replace_matches(html, '<h[1-6] id="(?:chp|sec):[^"]*"[^>]*>.*?</h[1-6]>', function(headings) {
     base::vapply(headings, function(heading) {
       old <- base::sub('^<h[1-6] id="([^"]+)".*$', '\\1', heading)
       if (old %in% explicit) return(heading)
@@ -153,10 +153,49 @@ r_notebook_read_script <- function(path) {
   base::paste(base::readLines(connection, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
 }
 
+# litedown requires heading content before an attribute block. Only normalize
+# ATX headings whose entire content is one unescaped, plain-text attribute block.
+r_notebook_empty_headings <- function(markdown) {
+  if (!base::grepl("{.", markdown, fixed = TRUE) &&
+      !base::grepl("{#", markdown, fixed = TRUE)) return(markdown)
+  lines <- base::strsplit(base::paste0(markdown, "\n"), "\n", fixed = TRUE)[[1L]]
+  # The bundled cmark tree has no exported R API. Keep this internal API use
+  # here; its node types and byte-based source positions are regression-tested.
+  tree <- litedown:::markdown_ast(lines)
+  visit <- function(node) {
+    if (!base::identical(node$type, "heading")) {
+      for (child in node$children) visit(child)
+      return(invisible(NULL))
+    }
+    if (node$sourcepos[[1L]] != node$sourcepos[[3L]] ||
+        base::length(node$children) != 1L) return(invisible(NULL))
+    content <- node$children[[1L]]
+    if (!base::identical(content$type, "text")) return(invisible(NULL))
+    value <- content$literal
+    if (!(base::startsWith(value, "{.") || base::startsWith(value, "{#")) ||
+        !base::endsWith(value, "}")) return(invisible(NULL))
+    inside <- base::substr(value, 2L, base::nchar(value) - 1L)
+    if (base::grepl("[{}]", inside)) return(invisible(NULL))
+    position <- content$sourcepos
+    index <- position[[1L]]
+    # Source positions count UTF-8 bytes, not R characters. Check the source
+    # too, so escaped braces and character references remain literal text.
+    bytes <- base::charToRaw(base::enc2utf8(lines[[index]]))
+    original <- base::rawToChar(bytes[base::seq.int(position[[2L]], position[[4L]])])
+    if (!base::identical(original, base::enc2utf8(value))) return(invisible(NULL))
+    before <- base::seq_len(position[[2L]] - 1L)
+    after <- base::seq.int(position[[2L]], base::length(bytes))
+    lines[[index]] <<- base::rawToChar(c(bytes[before], base::charToRaw("<!-- --> "), bytes[after]))
+  }
+  visit(tree)
+  base::paste(lines, collapse = "\n")
+}
+
 r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = list(), outline = FALSE, format = r_notebook_rmd) {
   r_notebook_require_litedown()
   settings <- format$options(metadata)
   markdown <- format$markdown(markdown, metadata)
+  markdown <- r_notebook_empty_headings(markdown)
   # Passing only preview metadata avoids loading publishing formats or templates.
   fields <- c(if (outline) c("title", "subtitle", "author", "date"), "bibliography")
   meta <- metadata[base::intersect(base::names(metadata), fields)]
@@ -240,12 +279,19 @@ r_notebook_litedown_html <- function(markdown, metadata = list(), knit_meta = li
     depth <- if (base::is.numeric(settings$toc_depth)) settings$toc_depth else 3L
     headings <- headings[base::as.integer(base::substr(headings, 3L, 3L)) <= depth &
       !base::grepl('class="[^"]*\\bunlisted\\b', headings, perl = TRUE)]
+    labels <- base::sub('^<h[1-6][^>]*>(.*?)</h[1-6]>$', '\\1', headings)
+    labels <- base::gsub('<span class="section-number[^"]*">.*?</span>|<!--.*?-->', '', labels, perl = TRUE)
+    headings <- headings[base::nzchar(base::trimws(labels))]
     if (base::length(headings)) {
       levels <- base::as.integer(base::substr(headings, 3L, 3L))
-      levels <- levels - base::min(levels)
-      # A jump from h1 to h4 still represents one nested TOC list.
-      if (base::length(levels) > 1L) for (i in 2L:base::length(levels)) {
-        levels[[i]] <- base::min(levels[[i]], levels[[i - 1L]] + 1L)
+      parents <- base::integer()
+      # Start with a root item even if the document begins at h2/h3. A jump
+      # over heading levels still creates only one nested list.
+      for (i in base::seq_along(levels)) {
+        parents <- parents[parents < levels[[i]]]
+        depth <- base::length(parents)
+        parents <- c(parents, levels[[i]])
+        levels[[i]] <- depth
       }
       headings <- base::gsub('<a\\b[^>]*>|</a>', '', headings, perl = TRUE)
       links <- base::sub('^<h[1-6] id="([^"]+)"[^>]*>(.*?)</h[1-6]>$', '<a href="#\\1">\\2</a>', headings)

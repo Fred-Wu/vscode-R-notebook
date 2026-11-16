@@ -4,6 +4,43 @@ r_notebook_math_assets <- normalizePath(file.path("dist", "katex"), winslash = "
 stopifnot(requireNamespace("litedown", quietly = TRUE))
 stopifnot(requireNamespace("rbibutils", quietly = TRUE))
 
+# Heading normalization must follow cmark's block and inline parsing, and must
+# preserve all source bytes except the inserted empty heading content.
+heading_cases <- c(
+  '## {.tabset}' = '## <!-- --> {.tabset}',
+  '  ###\t{#tabs .tabset} ###  ' = '  ###\t<!-- --> {#tabs .tabset} ###  ',
+  '> ## {.tabset}' = '> ## <!-- --> {.tabset}',
+  '- ## {.tabset}' = '- ## <!-- --> {.tabset}',
+  '> - ## {.tabset}' = '> - ## <!-- --> {.tabset}',
+  '## {.tabset}##' = '## {.tabset}##',
+  '## {.one} title {.two}' = '## {.one} title {.two}',
+  '## \\{.tabset}' = '## \\{.tabset}',
+  '## &#123;.tabset}' = '## &#123;.tabset}',
+  '## `{.tabset}`' = '## `{.tabset}`',
+  '## **{.tabset}**' = '## **{.tabset}**',
+  '####### {.tabset}' = '####### {.tabset}',
+  '    ## {.tabset}' = '    ## {.tabset}',
+  '```markdown\n## {.tabset}\n```' = '```markdown\n## {.tabset}\n```',
+  '> ```markdown\n> ## {.tabset}\n> ```' = '> ```markdown\n> ## {.tabset}\n> ```',
+  '<div>\n## {.tabset}\n</div>' = '<div>\n## {.tabset}\n</div>',
+  '<script>\n## {.tabset}\n</script>' = '<script>\n## {.tabset}\n</script>',
+  '<!--\n## {.tabset}\n-->' = '<!--\n## {.tabset}\n-->',
+  '{.tabset}\n---' = '{.tabset}\n---'
+)
+for (eol in c('\n', '\r\n')) for (trailing in c('', eol)) {
+  for (i in seq_along(heading_cases)) {
+    source <- paste0(gsub('\n', eol, names(heading_cases)[[i]], fixed = TRUE), trailing)
+    expected <- paste0(gsub('\n', eol, heading_cases[[i]], fixed = TRUE), trailing)
+    stopifnot(identical(r_notebook_empty_headings(source), expected))
+  }
+  # Fenced divisions precede notebook cells; they must not shift source offsets.
+  source <- paste(c('::: {.cell}', '## {.tabset}', '::: payload :::', '',
+    '## {#caf\u00e9 .tabset}', '', '## {.tabset}'), collapse = eol)
+  expected <- paste(c('::: {.cell}', '## <!-- --> {.tabset}', '::: payload :::', '',
+    '## <!-- --> {#caf\u00e9 .tabset}', '', '## <!-- --> {.tabset}'), collapse = eol)
+  stopifnot(identical(r_notebook_empty_headings(source), expected))
+}
+
 # Both complete notebook paths must work without loading rmarkdown or locating Pandoc.
 trace(base::loadNamespace, tracer = quote({
   if (identical(package, "rmarkdown") || identical(package, "bookdown")) {
@@ -146,6 +183,40 @@ run_tests <- function(extension) {
   literal <- r_notebook_litedown_html('`\\@ref(fig:demo)`\n\n# Explicit {#sec:keep}\n\n# Repeated\n\n# Repeated')
   stopifnot(grepl('id="sec:keep"', literal), grepl('id="repeated"', literal),
     grepl('id="repeated-1"', literal), grepl('\\@ref(fig:demo)', literal, fixed=TRUE))
+  # Anonymous attribute-only section headings are structure, not TOC labels.
+  toc_metadata <- if (quarto) list(toc = TRUE) else list(output = list(html_document = list(toc = TRUE)))
+  tabset_source <- c(
+    '## {.tabset}', '', '### Patient flow {.tabset}', '',
+    '## {#other-tabs .tabset .tabset-pills} ##', '', '### Another panel', '',
+    '# Literal `{.tabset}`', '', '```markdown', '## {.tabset}', '```'
+  )
+  for (eol in c('\n', '\r\n')) {
+    tabsets <- r_notebook_litedown_html(paste(tabset_source, collapse = eol), toc_metadata, outline = TRUE, format = format)
+    stopifnot(grepl('<h2 id="section" class="tabset"><!-- --></h2>', tabsets, fixed = TRUE),
+      grepl('<h2 class="tabset tabset-pills" id="other-tabs"><!-- --></h2>', tabsets, fixed = TRUE),
+      grepl('<h3 id="patient-flow" class="tabset">Patient flow</h3>', tabsets, fixed = TRUE),
+      grepl('Literal <code>{.tabset}</code>', tabsets, fixed = TRUE),
+      grepl('## {.tabset}', tabsets, fixed = TRUE))
+    toc_html <- regmatches(tabsets, regexpr('(?s)<nav id="TOC">.*?</nav>', tabsets, perl = TRUE))
+    stopifnot(grepl('href="#patient-flow"', toc_html, fixed = TRUE),
+      grepl('href="#another-panel"', toc_html, fixed = TRUE),
+      !grepl('href="#section"', toc_html, fixed = TRUE),
+      !grepl('href="#other-tabs"', toc_html, fixed = TRUE))
+  }
+  heading_edges <- r_notebook_litedown_html(paste(c(
+    '> ## {.tabset}', '', '- ## {#list-tabs .tabset}', '',
+    '## {.tabset}##', '', '<div>', '## {.tabset}', '</div>'
+  ), collapse = '\n'), toc_metadata, outline = TRUE, format = format)
+  stopifnot(grepl('<blockquote>\n<h2 id="section" class="tabset"><!-- --></h2>', heading_edges, fixed = TRUE),
+    grepl('<h2 class="tabset" id="list-tabs"><!-- --></h2>', heading_edges, fixed = TRUE),
+    grepl('>{.tabset}##</h2>', heading_edges, fixed = TRUE),
+    grepl('<div>\n## {.tabset}\n</div>', heading_edges, fixed = TRUE))
+  numbered_metadata <- if (quarto) list(toc = TRUE, 'number-sections' = TRUE) else
+    list(output = list(html_document = list(toc = TRUE, number_sections = TRUE)))
+  numbered <- r_notebook_litedown_html('## {.tabset .unnumbered}\n\n# First',
+    numbered_metadata, outline = TRUE, format = format)
+  stopifnot(grepl('<h2 id="section" class="tabset unnumbered"><!-- --></h2>', numbered, fixed = TRUE),
+    grepl('<span class="section-number main-number">1</span> First', numbered, fixed = TRUE))
   math <- r_notebook_litedown_html('Inline $x^2$ and display $$y^2$$.')
   stopifnot(grepl('data-r-notebook-math', math), grepl('renderMathInElement', math),
     !grepl('<script[^>]+src="https?://|<link[^>]+href="https?://', math))
