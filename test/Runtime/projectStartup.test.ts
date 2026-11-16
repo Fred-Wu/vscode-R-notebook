@@ -84,6 +84,9 @@ for (const extension of ["Rmd", "qmd"]) test(`${extension}: unsaved notebook cel
     await fs.writeFile(document, "Saved text that the unsaved snapshot replaces.\n");
     delete process.env.R_PROFILE_USER;
     const bridge = new RExecutionBridge(path.resolve("resources/r/execute.R"), r);
+    const packages = await bridge.notebookPackages();
+    assert.equal(path.resolve(packages.library), path.resolve(library));
+    assert.deepEqual(packages.missing, []);
     const result = await bridge.execute(source, document, {
       isCancellationRequested: false,
       onCancellationRequested: () => ({ dispose() {} }),

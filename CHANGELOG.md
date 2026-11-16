@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Offer to install missing notebook R packages into the session's library at startup.
 - Share knitr execution and litedown rendering between R Markdown and Quarto notebooks, with separate format adapters and no publishing-tool requirement for previews.
 
 ## [0.2.0] - 2026-08-02

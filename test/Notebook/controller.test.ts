@@ -3,6 +3,7 @@ import Module from "node:module";
 import test from "node:test";
 import type * as vscode from "vscode";
 import { RInterruptError } from "../../src/Runtime/process";
+import type { NotebookPackageStatus } from "../../src/Runtime/bridge";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -35,6 +36,9 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
   let configuration = async () => true;
   let selectAttachment = async () => {};
   let startProcess = async () => {};
+  let checkPackages = async (_install?: { packages: string[]; library: string }): Promise<NotebookPackageStatus> =>
+    ({ library: "/project/library", missing: [] });
+  let packageChoice = async (): Promise<string | undefined> => undefined;
   const metadataUpdates: unknown[] = [];
   let textRenders = 0;
   let renderFailure: Error | undefined;
@@ -67,7 +71,12 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     },
     workspace: { isTrusted: true, applyEdit: (edit: Edit) => applyEdit(edit),
       getConfiguration: () => ({ get: () => 0 }) },
-    window: { setStatusBarMessage() {}, showErrorMessage(message: string) { shownErrors.push(message); } },
+    ProgressLocation: { Notification: 15 },
+    window: {
+      setStatusBarMessage() {}, showErrorMessage(message: string) { shownErrors.push(message); },
+      showInformationMessage: () => packageChoice(),
+      withProgress: (_options: unknown, task: () => Promise<void>) => task(),
+    },
     notebooks: {
       createNotebookController: () => ({
         set executeHandler(handler: typeof execute) { execute = handler; },
@@ -94,6 +103,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     "../Runtime/bridge": {
       TextRenderCancelledError,
       RExecutionBridge: class {
+        notebookPackages(install?: { packages: string[]; library: string }) { return checkPackages(install); }
         async execute(source: string, _path: string, token: vscode.CancellationToken) {
           await executeBridge(source, token);
           return { success: !token.isCancellationRequested, outputs: [] };
@@ -110,6 +120,7 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
       createInlineRProcess: () => {
         const process = {
           running: false, starts: 0,
+          get processId() { return this.running ? 100 + processes.indexOf(this) : undefined; },
           async start() { this.starts++; await startProcess(); this.running = true; },
           async dispose() { this.running = false; },
         };
@@ -152,6 +163,100 @@ test("notebook controller execution and shutdown lifecycle", async (t) => {
     return Object.assign(document, { getCells: () => cells }) as unknown as vscode.NotebookDocument;
   };
   const controller = () => new Controller("helper.R", { appendLine() {} } as unknown as vscode.OutputChannel, false);
+
+  await t.test("startup offers packages once and gates queued execution until installation finishes", async () => {
+    const c = controller();
+    const document = notebook("code");
+    const choice = deferred<string>();
+    const installed = deferred<void>();
+    let checks = 0;
+    let installs = 0;
+    let executed = 0;
+    let offers = 0;
+    checkPackages = async (install) => {
+      assert.equal(processes.at(-1)!.running, true, "Check ran before R startup");
+      if (install) {
+        installs++;
+        assert.deepEqual(install, { packages: ["litedown", "jsonlite"], library: "/project/library" });
+        await installed.promise;
+        return { library: "/project/library", missing: [] };
+      }
+      checks++;
+      return { library: "/project/library", missing: ["litedown", "jsonlite"] };
+    };
+    packageChoice = () => { offers++; return choice.promise; };
+    executeBridge = async () => { executed++; };
+    const selected = c.selectNotebook(document);
+    const execution = execute(document.getCells());
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(offers, 1);
+      assert.equal(executed, 0);
+      choice.resolve("Install");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(installs, 1);
+      assert.equal(executed, 0);
+      installed.resolve();
+      await Promise.all([selected, execution]);
+      assert.equal(executed, 2);
+      await c.selectNotebook(document);
+      assert.equal(checks, 1);
+    } finally {
+      choice.resolve("Not Now"); installed.resolve();
+      await Promise.allSettled([selected, execution]);
+      await c.dispose();
+      checkPackages = async () => ({ library: "/project/library", missing: [] });
+      packageChoice = async () => undefined;
+      executeBridge = async () => {};
+    }
+  });
+
+  await t.test("a declined package offer is not repeated until R restarts", async () => {
+    const c = controller();
+    const document = notebook("code");
+    let offers = 0;
+    checkPackages = async (install) => {
+      assert.equal(install, undefined);
+      return { library: "/project/library", missing: ["knitr"] };
+    };
+    packageChoice = async () => { offers++; return "Not Now"; };
+    try {
+      await c.selectNotebook(document);
+      await c.selectNotebook(document);
+      assert.equal(offers, 1);
+      await c.restartSession(document);
+      assert.equal(offers, 2);
+    } finally {
+      await c.dispose();
+      checkPackages = async () => ({ library: "/project/library", missing: [] });
+      packageChoice = async () => undefined;
+    }
+  });
+
+  await t.test("accepting a stale package offer cannot install after shutdown", async () => {
+    const c = controller();
+    const document = notebook("code");
+    const choice = deferred<string>();
+    let installs = 0;
+    checkPackages = async (install) => {
+      if (install) installs++;
+      return { library: "/project/library", missing: ["knitr"] };
+    };
+    packageChoice = () => choice.promise;
+    const selected = c.selectNotebook(document);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await c.shutdownSession(document.uri);
+      choice.resolve("Install");
+      await selected;
+      assert.equal(installs, 0);
+      assert.equal(c.hasSession(document.uri), false);
+    } finally {
+      choice.resolve("Not Now"); await selected; await c.dispose();
+      checkPackages = async () => ({ library: "/project/library", missing: [] });
+      packageChoice = async () => undefined;
+    }
+  });
 
   for (const action of ["shutdown", "close tab", "change selection", "dispose"] as const) {
     await t.test(`pending selection cannot undo ${action}`, async () => {

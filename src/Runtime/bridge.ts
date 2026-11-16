@@ -17,6 +17,11 @@ export interface BridgeOutput {
 
 export class TextRenderCancelledError extends Error {}
 
+export interface NotebookPackageStatus {
+  library: string;
+  missing: string[];
+}
+
 interface BridgeResult {
   success: boolean;
   outputs: BridgeOutput[];
@@ -196,6 +201,43 @@ export class RExecutionBridge {
     private readonly helperPath: string,
     private readonly transport: InlineRTransport
   ) {}
+
+  async notebookPackages(install?: { packages: string[]; library: string }): Promise<NotebookPackageStatus> {
+    const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "r-notebook-packages-"));
+    const requestPath = path.join(directory, "request.R");
+    let completion: ReturnType<typeof waitForDone> | undefined;
+    let dispatch: InlineDispatch | undefined;
+    try {
+      await fsPromises.writeFile(requestPath, interruptibleRequest(directory, [
+        "tryCatch({",
+        "  bridge <- new.env(parent = baseenv())",
+        `  base::sys.source(${rString(path.join(path.dirname(this.helperPath), "packages.R"))}, envir = bridge)`,
+        `  bridge$r_notebook_packages(${rString(path.join(directory, "packages.txt"))}${install
+          ? `, packages = c(${install.packages.map(rString).join(", ")}), library = ${rString(install.library)}`
+          : ""})`,
+        `  base::writeLines('true', ${rString(path.join(directory, ".done"))})`,
+        `  base::file.rename(${rString(path.join(directory, ".done"))}, ${rString(path.join(directory, "done"))})`,
+        "}, error = function(error) {",
+        `  base::writeLines(base::conditionMessage(error), ${rString(path.join(directory, "error.txt"))}, useBytes = TRUE)`,
+        "})",
+      ]), "utf8");
+      completion = waitForDone(directory, "finished");
+      dispatch = await this.transport.send(`base::source(${rString(requestPath)}, echo = FALSE)`);
+      await Promise.race([completion.promise, dispatch.failure]);
+      await ensureRequestSucceeded(directory, "Could not check or install notebook R packages.");
+      const [encodedLibraries, ...missing] = (await fsPromises.readFile(path.join(directory, "packages.txt"), "utf8"))
+        .trimEnd().split(/\r?\n/);
+      const libraries = encodedLibraries?.split("\t").map(decodeURIComponent) ?? [];
+      const library = libraries[0];
+      if (!library) throw new Error("R did not report its package library.");
+      this.transport.setLibraryPaths?.(libraries);
+      return { library, missing };
+    } finally {
+      dispatch?.dispose();
+      completion?.watcher.close();
+      await fsPromises.rm(directory, { recursive: true, force: true });
+    }
+  }
 
   async execute(
     chunkSource: string,

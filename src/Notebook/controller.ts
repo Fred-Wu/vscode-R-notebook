@@ -22,6 +22,7 @@ import {
 } from "../Runtime/bridge";
 import { RInterruptError, type HiddenRProcess } from "../Runtime/process";
 import { RStartupCancelledError, waitForRStartup } from "../Runtime/startup";
+import { NotebookPackageInstaller } from "../Runtime/packages";
 import { InlineSessCoordinator } from "../Runtime/sess";
 import {
   createInlineRProcess,
@@ -37,6 +38,7 @@ interface NotebookSession {
   bridge: RExecutionBridge;
   queue: Promise<void>;
   startup?: Promise<void>;
+  packagesCheckedProcessId?: number;
   stopped: boolean;
   textRevision: number;
   closedAt?: number;
@@ -82,6 +84,7 @@ export class RNotebookController implements vscode.Disposable {
   private readonly controller: vscode.NotebookController;
   private readonly sessions = new Map<string, NotebookSession>();
   private readonly attachment: InlineSessCoordinator;
+  private readonly packages: NotebookPackageInstaller;
   private readonly markdownStateChanged = new vscode.EventEmitter<vscode.NotebookDocument>();
   readonly onDidChangeMarkdownState = this.markdownStateChanged.event;
   private readonly notebookStateChanged = new vscode.EventEmitter<vscode.NotebookDocument>();
@@ -102,6 +105,7 @@ export class RNotebookController implements vscode.Disposable {
     private readonly sessionIntegrationEnabled: boolean
   ) {
     this.attachment = new InlineSessCoordinator();
+    this.packages = new NotebookPackageInstaller(output);
     this.controller = vscode.notebooks.createNotebookController(
       "r-notebook-inline",
       NOTEBOOK_TYPE,
@@ -156,18 +160,23 @@ export class RNotebookController implements vscode.Disposable {
         : session.process.start();
     };
     const stopping = this.stopping.get(session.uri.toString());
+    const wasRunning = session.process.running;
     const start = stopping ? stopping.then(startProcess) : startProcess();
-    if (session.process.running) {
-      return start;
-    }
     const startup = start
+      .then(async () => {
+        const processId = session.process.processId;
+        if (processId === undefined || session.packagesCheckedProcessId === processId) return;
+        const active = () => !session.stopped && !this.disposed && session.process.processId === processId;
+        await this.packages.ensure(session.bridge, active);
+        if (active()) session.packagesCheckedProcessId = processId;
+      })
       .finally(() => {
         if (session.startup === startup) {
           session.startup = undefined;
         }
       });
     session.startup = startup;
-    void vscode.window.setStatusBarMessage(
+    if (!wasRunning) void vscode.window.setStatusBarMessage(
       "$(sync~spin) Starting R session…",
       startup
     );

@@ -38,6 +38,7 @@ export interface InlineDispatch {
 export interface InlineRTransport {
   send(command: string, token?: CancellationToken): Promise<InlineDispatch>;
   interrupt(): Promise<void>;
+  setLibraryPaths?(libraries: string[]): void;
 }
 
 export class RInterruptError extends Error {}
@@ -60,7 +61,8 @@ export interface HiddenRLaunchOptions {
 
 async function interruptWindowsRProcess(
   options: HiddenRLaunchOptions,
-  processId: number
+  processId: number,
+  libraries?: string[]
 ): Promise<void> {
   try {
     await execFileAsync(
@@ -70,7 +72,8 @@ async function interruptWindowsRProcess(
         "--no-site-file",
         "--no-init-file",
         "-e",
-        "if (!requireNamespace('ps', quietly = TRUE)) stop(\"The R package 'ps' is required to cancel notebook execution on Windows.\"); "
+        (libraries?.length ? `.libPaths(c(${libraries.map(library => JSON.stringify(library)).join(", ")})); ` : "")
+          + "if (!requireNamespace('ps', quietly = TRUE)) stop(\"The R package 'ps' is required to cancel notebook execution on Windows.\"); "
           // CTRL+C can be inherited as ignored by a hidden Windows process.
           // CTRL+BREAK reaches Rterm's interrupt handler in that case too.
           + `ps::ps_interrupt(ps::ps_handle(${processId}), ctrl_c = FALSE)`,
@@ -133,6 +136,7 @@ export class HiddenRProcess implements InlineRTransport {
   private currentLaunchOptions: HiddenRLaunchOptions | undefined;
   private currentInitialization: HiddenRLaunchOptions["initialization"] | undefined;
   private rProcessId: number | undefined;
+  private libraryPaths: string[] | undefined;
   private ready = false;
   private disposed = false;
   private stopping?: Promise<void>;
@@ -158,6 +162,10 @@ export class HiddenRProcess implements InlineRTransport {
     return this.ready && !!this.child && isRunning(this.child);
   }
 
+  setLibraryPaths(libraries: string[]): void {
+    this.libraryPaths = [...libraries];
+  }
+
   private clearProcess(child: ChildProcessWithoutNullStreams): void {
     if (this.child === child) {
       const wasRunning = this.ready;
@@ -167,6 +175,7 @@ export class HiddenRProcess implements InlineRTransport {
       this.currentInitialization?.preparation?.dispose();
       this.currentInitialization = undefined;
       this.rProcessId = undefined;
+      this.libraryPaths = undefined;
       this.ready = false;
       if (wasRunning) {
         this.runningChanged(false);
@@ -522,7 +531,7 @@ export class HiddenRProcess implements InlineRTransport {
     }
     this.currentInterruption = Promise.resolve().then(() => {
       if (options.interrupt) return options.interrupt(processId);
-      if (process.platform === "win32") return interruptWindowsRProcess(options, processId);
+      if (process.platform === "win32") return interruptWindowsRProcess(options, processId, this.libraryPaths);
       if (!child.kill("SIGINT")) throw new Error("Could not send SIGINT to the inline R process.");
     }).catch(async (error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
